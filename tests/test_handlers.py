@@ -40,6 +40,10 @@ def make_context(ai_client: Mock | None = None) -> SimpleNamespace:
             bot_data={
                 "ai_client": ai_client or Mock(),
                 "user_locks": {},
+                "config": SimpleNamespace(
+                    allow_public_access=False,
+                    telegram_allowed_user_ids=frozenset({123}),
+                ),
             }
         ),
         bot=SimpleNamespace(send_chat_action=AsyncMock()),
@@ -263,7 +267,9 @@ def test_run_tool_command_returns_json(to_thread: AsyncMock) -> None:
 
     asyncio.run(run_tool(update, context))
 
-    to_thread.assert_awaited_once_with(manager.execute, "system_info")
+    to_thread.assert_awaited_once_with(
+        manager.execute, "system_info", initiator_user_id=123
+    )
     reply = update.effective_message.reply_text.await_args.args[0]
     assert '"tool": "system_info"' in reply
     assert '"hostname": "test-host"' in reply
@@ -279,5 +285,70 @@ def test_run_tool_command_requires_name() -> None:
     asyncio.run(run_tool(update, context))
 
     update.effective_message.reply_text.assert_awaited_once_with(
-        "Использование: /tool system_info"
+        "Использование:\n"
+        "/tool system_info\n"
+        "/tool remote_system_info <host>\n"
+        "/tool remote_service_status <host> <service>"
     )
+
+
+@patch("app.handlers.asyncio.to_thread", new_callable=AsyncMock)
+def test_run_remote_service_tool_passes_only_validated_arguments(
+    to_thread: AsyncMock,
+) -> None:
+    from app.handlers import run_tool
+    from app.tools.result import ToolResult
+
+    update = make_update()
+    manager = Mock()
+    context = make_context()
+    context.args = ["remote_service_status", "crypto", "safe.service"]
+    context.application.bot_data["tool_manager"] = manager
+    to_thread.return_value = ToolResult(
+        True, "remote_service_status", {}, "ok", 1, None
+    )
+
+    asyncio.run(run_tool(update, context))
+
+    to_thread.assert_awaited_once_with(
+        manager.execute,
+        "remote_service_status",
+        host_alias="crypto",
+        service_name="safe.service",
+        initiator_user_id=123,
+    )
+
+
+@patch("app.handlers.asyncio.to_thread", new_callable=AsyncMock)
+def test_run_tool_is_never_available_via_public_access(
+    to_thread: AsyncMock,
+) -> None:
+    from app.handlers import run_tool
+
+    update = make_update()
+    context = make_context()
+    context.args = ["system_info"]
+    context.application.bot_data["config"] = SimpleNamespace(
+        allow_public_access=True,
+        telegram_allowed_user_ids=frozenset(),
+    )
+
+    asyncio.run(run_tool(update, context))
+
+    to_thread.assert_not_awaited()
+    update.effective_message.reply_text.assert_awaited_once_with(
+        "Доступ запрещён."
+    )
+
+
+def test_run_tool_rejects_arbitrary_command_text() -> None:
+    from app.handlers import run_tool
+
+    update = make_update()
+    context = make_context()
+    context.args = ["remote_system_info", "crypto", "uname", "-a"]
+
+    asyncio.run(run_tool(update, context))
+
+    reply = update.effective_message.reply_text.await_args.args[0]
+    assert "Использование:" in reply

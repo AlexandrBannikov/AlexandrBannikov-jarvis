@@ -49,6 +49,8 @@ python -m app.main
 ```
 
 Логи одновременно выводятся в консоль и записываются в `logs/jarvis.log`.
+Аудит удалённых операций пишется отдельно в `logs/audit.log`; INFO-записи не
+содержат внутренних команд и полных stdout/stderr.
 API-ключи и полные ответы модели в журнал не записываются.
 
 ## Настройка LLM
@@ -79,6 +81,8 @@ ALLOW_PUBLIC_ACCESS=false
   Telegram user ID.
 - `ALLOW_PUBLIC_ACCESS` — явное разрешение публичного доступа. По умолчанию
   `false`; включать его следует только осознанно.
+- `JARVIS_HOSTS_CONFIG` — необязательный путь к строгой YAML-конфигурации
+  удалённых серверов; по умолчанию `/etc/jarvis/hosts.yaml`.
 
 OpenAI подключён через официальный современный SDK и Responses API. Сетевой
 запрос ограничен таймаутом в 30 секунд.
@@ -158,3 +162,59 @@ tail -n 100 /opt/jarvis/logs/jarvis.log
 
 Unit запускается без root-доступа и использует systemd hardening. Запись
 разрешена только в `/opt/jarvis/logs` и `/opt/jarvis/data`.
+
+## Безопасный удалённый мониторинг
+
+Jarvis поддерживает только две встроенные read-only SSH-операции:
+`remote_system_info` и `remote_service_status`. Произвольные shell-команды,
+парольная аутентификация, SSH agent, автоматический поиск ключей и
+автоматическое принятие host key не поддерживаются.
+
+Скопируйте `config/hosts.example.yaml` в `/etc/jarvis/hosts.yaml` вручную и
+замените только тестовые адреса и allowlist сервисов. Файл примера использует
+зарезервированные документационные IP-адреса. Приложение и установщик не
+создают production `hosts.yaml`, `known_hosts` или приватные ключи.
+
+Рекомендуемая подготовка каждого сервера:
+
+1. Создайте отдельного непривилегированного пользователя `jarvis-monitor`,
+   запретите root-вход и не добавляйте sudoers.
+2. Сгенерируйте отдельный Ed25519-ключ для каждого сервера. Никогда не
+   публикуйте приватный ключ и не добавляйте его в Git.
+3. Ограничьте запись в `authorized_keys` на сервере параметрами, подходящими
+   вашей SSH-политике (как минимум запретите forwarding и PTY). Доступ этого
+   пользователя должен оставаться read-only.
+4. Получите fingerprint host key по доверенному административному каналу и
+   сверьте его вручную. Только после проверки добавьте запись в
+   `/etc/jarvis/known_hosts`. Jarvis принципиально не заполняет этот файл
+   автоматически.
+5. Установите файлы с правами:
+
+```bash
+sudo install -d -o root -g jarvis -m 0750 /etc/jarvis/keys
+sudo install -o root -g jarvis -m 0640 ./host_ed25519 \
+    /etc/jarvis/keys/host_ed25519
+sudo chown root:jarvis /etc/jarvis/hosts.yaml /etc/jarvis/known_hosts
+sudo chmod 0640 /etc/jarvis/hosts.yaml /etc/jarvis/known_hosts
+```
+
+Проверка разрешённых инструментов из CLI:
+
+```bash
+python scripts/run_tool.py system_info
+python scripts/run_tool.py remote_system_info --host crypto
+python scripts/run_tool.py remote_service_status \
+    --host crypto --service crypto-paper.timer
+```
+
+Telegram поддерживает эквивалентные allowlisted-команды:
+
+```text
+/tool system_info
+/tool remote_system_info crypto
+/tool remote_service_status crypto crypto-paper.timer
+```
+
+Имя systemd unit должно одновременно соответствовать безопасному шаблону и
+присутствовать в `allowed_services` выбранного хоста. Внутренняя SSH-команда,
+пути ключей, конфигурация и traceback пользователю не возвращаются.

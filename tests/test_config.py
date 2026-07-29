@@ -1,5 +1,7 @@
 """Tests for environment-based configuration."""
 
+from pathlib import Path
+
 import pytest
 
 from app.config import load_config
@@ -22,6 +24,7 @@ def test_load_config_reads_token_from_environment(monkeypatch: pytest.MonkeyPatc
     assert config.openai_base_url == "https://example.test/v1"
     assert config.telegram_allowed_user_ids == frozenset({123, 456})
     assert config.allow_public_access is False
+    assert config.jarvis_hosts_config == Path("/etc/jarvis/hosts.yaml")
 
 
 def test_load_config_strips_whitespace(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -82,3 +85,11 @@ def test_load_config_rejects_unknown_provider(
 
     with pytest.raises(RuntimeError, match="Unsupported LLM_PROVIDER"):
         load_config()
+
+
+def test_load_config_reads_hosts_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "test-token")
+    monkeypatch.setenv("ALLOW_PUBLIC_ACCESS", "true")
+    monkeypatch.setenv("JARVIS_HOSTS_CONFIG", "/safe/hosts.yaml")
+
+    assert load_config().jarvis_hosts_config == Path("/safe/hosts.yaml")

@@ -12,6 +12,8 @@ dependencies = [
     "python-telegram-bot",
     "openai",
     "python-dotenv",
+    "paramiko",
+    "PyYAML",
 ]
 
 [project.optional-dependencies]

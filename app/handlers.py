@@ -29,7 +29,9 @@ HELP_MESSAGE = (
     "/help — показать доступные команды\n"
     "/ping — проверить доступность\n"
     "/status — показать состояние системы\n"
-    "/tool system_info — выполнить тестовый системный инструмент"
+    "/tool system_info — локальная диагностика\n"
+    "/tool remote_system_info <host> — удалённая диагностика\n"
+    "/tool remote_service_status <host> <service> — статус сервиса"
 )
 PROCESS_STARTED_AT = time.monotonic()
 MAX_INPUT_LENGTH = 4_000
@@ -105,12 +107,43 @@ async def run_tool(
     message = update.effective_message
     if message is None:
         return
-    if len(context.args) != 1:
-        await message.reply_text("Использование: /tool system_info")
+    user = update.effective_user
+    config = context.application.bot_data["config"]
+    if (
+        user is None
+        or user.id not in config.telegram_allowed_user_ids
+    ):
+        await message.reply_text("Доступ запрещён.")
         return
 
+    arguments = list(context.args)
+    parameters: dict[str, object]
+    if arguments == ["system_info"]:
+        tool_name = "system_info"
+        parameters = {}
+    elif len(arguments) == 2 and arguments[0] == "remote_system_info":
+        tool_name = arguments[0]
+        parameters = {"host_alias": arguments[1]}
+    elif len(arguments) == 3 and arguments[0] == "remote_service_status":
+        tool_name = arguments[0]
+        parameters = {
+            "host_alias": arguments[1],
+            "service_name": arguments[2],
+        }
+    else:
+        await message.reply_text(
+            "Использование:\n"
+            "/tool system_info\n"
+            "/tool remote_system_info <host>\n"
+            "/tool remote_service_status <host> <service>"
+        )
+        return
+
+    parameters["initiator_user_id"] = user.id
     manager = context.application.bot_data["tool_manager"]
-    result = await asyncio.to_thread(manager.execute, context.args[0])
+    result = await asyncio.to_thread(
+        manager.execute, tool_name, **parameters
+    )
     response = json.dumps(asdict(result), ensure_ascii=False, indent=2)
     for chunk in _split_message(response):
         await message.reply_text(chunk)

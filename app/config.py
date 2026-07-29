@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 import os
 from collections.abc import Mapping
+from pathlib import Path
 
 
 SUPPORTED_LLM_PROVIDERS = frozenset({"openai"})
@@ -19,6 +20,7 @@ class Config:
     log_level: str = "INFO"
     telegram_allowed_user_ids: frozenset[int] = frozenset()
     allow_public_access: bool = False
+    jarvis_hosts_config: Path = Path("/etc/jarvis/hosts.yaml")
 
 
 def _parse_boolean(value: str, name: str) -> bool:
@@ -85,4 +87,10 @@ def load_config(environment: Mapping[str, str] | None = None) -> Config:
         log_level=log_level,
         telegram_allowed_user_ids=allowed_user_ids,
         allow_public_access=allow_public_access,
+        jarvis_hosts_config=Path(
+            values.get(
+                "JARVIS_HOSTS_CONFIG", "/etc/jarvis/hosts.yaml"
+            ).strip()
+            or "/etc/jarvis/hosts.yaml"
+        ),
     )

@@ -51,3 +51,17 @@ def test_registry_unregisters_tool() -> None:
 
     with pytest.raises(KeyError, match="Unknown tool"):
         registry.get("example")
+
+
+def test_default_registry_contains_remote_read_only_tools(
+    tmp_path,
+) -> None:
+    from app.tools import create_default_tool_manager
+
+    manager = create_default_tool_manager(str(tmp_path / "missing.yaml"))
+
+    assert [tool.name for tool in manager.registry.list_tools()] == [
+        "remote_service_status",
+        "remote_system_info",
+        "system_info",
+    ]

@@ -1,0 +1,23 @@
+known_hosts_file: /etc/jarvis/known_hosts
+
+hosts:
+  crypto:
+    hostname: 192.0.2.10
+    port: 22
+    username: jarvis-monitor
+    identity_file: /etc/jarvis/keys/crypto_ed25519
+    connect_timeout_seconds: 10
+    command_timeout_seconds: 15
+    allowed_services:
+      - crypto-paper.timer
+      - crypto-paper.service
+
+  vpn:
+    hostname: 192.0.2.20
+    port: 22
+    username: jarvis-monitor
+    identity_file: /etc/jarvis/keys/vpn_ed25519
+    connect_timeout_seconds: 10
+    command_timeout_seconds: 15
+    allowed_services:
+      - x-ui.service

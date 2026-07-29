@@ -6,6 +6,7 @@ from typing import Any
 
 from app.tools.registry import ToolRegistry
 from app.tools.result import ToolResult
+from app.infrastructure.errors import InfrastructureError
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +25,22 @@ class ToolManager:
             data = tool.execute(**kwargs)
             if not isinstance(data, dict):
                 raise TypeError("Tool execute() must return a dict")
+        except InfrastructureError as error:
+            duration_ms = round((time.monotonic() - started_at) * 1_000, 3)
+            logger.warning(
+                "Tool execution failed: tool=%s duration_ms=%.3f error_type=%s",
+                name,
+                duration_ms,
+                error.code,
+            )
+            return ToolResult(
+                success=False,
+                tool=name,
+                data={},
+                message="Tool execution failed.",
+                duration_ms=duration_ms,
+                error=error.code,
+            )
         except Exception as error:
             duration_ms = round(
                 (time.monotonic() - started_at) * 1_000, 3

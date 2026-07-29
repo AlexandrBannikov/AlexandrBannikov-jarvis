@@ -5,17 +5,27 @@ from app.tools.manager import ToolManager
 from app.tools.registry import ToolRegistry
 from app.tools.result import ToolResult
 from app.tools.system_info import SystemInfoTool
+from app.infrastructure.hosts import DEFAULT_HOSTS_CONFIG, load_hosts_config
+from app.tools.remote_service_status import RemoteServiceStatusTool
+from app.tools.remote_system_info import RemoteSystemInfoTool
 
 
-def create_default_tool_manager() -> ToolManager:
+def create_default_tool_manager(
+    hosts_config_path: str | None = None,
+) -> ToolManager:
     """Create a manager containing Jarvis built-in tools."""
     registry = ToolRegistry()
     registry.register(SystemInfoTool())
+    hosts = load_hosts_config(hosts_config_path or DEFAULT_HOSTS_CONFIG)
+    registry.register(RemoteSystemInfoTool(hosts))
+    registry.register(RemoteServiceStatusTool(hosts))
     return ToolManager(registry)
 
 
 __all__ = [
     "SystemInfoTool",
+    "RemoteSystemInfoTool",
+    "RemoteServiceStatusTool",
     "Tool",
     "ToolManager",
     "ToolRegistry",

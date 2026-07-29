@@ -11,7 +11,7 @@ LOG_FORMAT = "%(asctime)s | %(levelname)s | %(name)s | %(message)s"
 
 
 def configure_logging(log_level: str = "INFO") -> None:
-    """Write application logs to stdout and logs/jarvis.log."""
+    """Configure application and sanitized remote-operation audit logs."""
     log_directory = Path("logs")
     log_directory.mkdir(parents=True, exist_ok=True)
 
@@ -24,6 +24,15 @@ def configure_logging(log_level: str = "INFO") -> None:
         ],
         force=True,
     )
+    audit_handler = logging.FileHandler(
+        log_directory / "audit.log", encoding="utf-8"
+    )
+    audit_handler.setFormatter(logging.Formatter(LOG_FORMAT))
+    audit_logger = logging.getLogger("jarvis.audit")
+    audit_logger.handlers.clear()
+    audit_logger.addHandler(audit_handler)
+    audit_logger.setLevel(logging.INFO)
+    audit_logger.propagate = False
 
 
 def main() -> None:

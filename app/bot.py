@@ -21,7 +21,9 @@ def build_application(config: Config) -> Application:
     application = Application.builder().token(config.telegram_bot_token).build()
     application.bot_data["config"] = config
     application.bot_data["ai_client"] = AIClient(config)
-    application.bot_data["tool_manager"] = create_default_tool_manager()
+    application.bot_data["tool_manager"] = create_default_tool_manager(
+        str(config.jarvis_hosts_config)
+    )
     application.bot_data["user_locks"] = {}
     application.add_handler(MessageHandler(filters.ALL, authorize), group=-1)
     application.add_handler(CommandHandler("start", start))
