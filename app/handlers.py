@@ -2,7 +2,9 @@
 
 import asyncio
 from contextlib import suppress
+from dataclasses import asdict
 from datetime import datetime, timezone
+import json
 import logging
 import platform
 import socket
@@ -26,7 +28,8 @@ HELP_MESSAGE = (
     "/start — запустить Jarvis\n"
     "/help — показать доступные команды\n"
     "/ping — проверить доступность\n"
-    "/status — показать состояние системы"
+    "/status — показать состояние системы\n"
+    "/tool system_info — выполнить тестовый системный инструмент"
 )
 PROCESS_STARTED_AT = time.monotonic()
 MAX_INPUT_LENGTH = 4_000
@@ -93,6 +96,24 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
     if update.effective_message:
         await update.effective_message.reply_text(message)
+
+
+async def run_tool(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """Temporarily expose registered tools for direct verification."""
+    message = update.effective_message
+    if message is None:
+        return
+    if len(context.args) != 1:
+        await message.reply_text("Использование: /tool system_info")
+        return
+
+    manager = context.application.bot_data["tool_manager"]
+    result = await asyncio.to_thread(manager.execute, context.args[0])
+    response = json.dumps(asdict(result), ensure_ascii=False, indent=2)
+    for chunk in _split_message(response):
+        await message.reply_text(chunk)
 
 
 async def handle_text(

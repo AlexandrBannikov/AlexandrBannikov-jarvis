@@ -240,3 +240,44 @@ def test_text_handler_rejects_parallel_request() -> None:
     update.effective_message.reply_text.assert_awaited_once_with(
         "Предыдущий запрос ещё обрабатывается."
     )
+
+
+@patch("app.handlers.asyncio.to_thread", new_callable=AsyncMock)
+def test_run_tool_command_returns_json(to_thread: AsyncMock) -> None:
+    from app.handlers import run_tool
+    from app.tools.result import ToolResult
+
+    update = make_update()
+    manager = Mock()
+    context = make_context()
+    context.args = ["system_info"]
+    context.application.bot_data["tool_manager"] = manager
+    to_thread.return_value = ToolResult(
+        success=True,
+        tool="system_info",
+        data={"hostname": "test-host"},
+        message="Tool executed successfully.",
+        duration_ms=1.0,
+        error=None,
+    )
+
+    asyncio.run(run_tool(update, context))
+
+    to_thread.assert_awaited_once_with(manager.execute, "system_info")
+    reply = update.effective_message.reply_text.await_args.args[0]
+    assert '"tool": "system_info"' in reply
+    assert '"hostname": "test-host"' in reply
+
+
+def test_run_tool_command_requires_name() -> None:
+    from app.handlers import run_tool
+
+    update = make_update()
+    context = make_context()
+    context.args = []
+
+    asyncio.run(run_tool(update, context))
+
+    update.effective_message.reply_text.assert_awaited_once_with(
+        "Использование: /tool system_info"
+    )
