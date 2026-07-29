@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "jarvis"
+version = "0.1.0"
+description = "Персональный AI-ассистент для управления инфраструктурой пользователя."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "python-telegram-bot",
+    "openai",
+    "python-dotenv",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest",
+]
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
