@@ -1,6 +1,7 @@
 """Telegram command handlers."""
 
 import asyncio
+from contextlib import suppress
 from datetime import datetime, timezone
 import logging
 import platform
@@ -8,7 +9,8 @@ import socket
 import time
 
 from telegram import Update
-from telegram.ext import ContextTypes
+from telegram.constants import ChatAction
+from telegram.ext import ApplicationHandlerStop, ContextTypes
 
 from app.ai.provider import (
     LLMConfigurationError,
@@ -27,6 +29,24 @@ HELP_MESSAGE = (
     "/status — показать состояние системы"
 )
 PROCESS_STARTED_AT = time.monotonic()
+MAX_INPUT_LENGTH = 4_000
+TELEGRAM_MESSAGE_LIMIT = 4_096
+
+
+async def authorize(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """Stop processing updates from users outside the configured allowlist."""
+    config = context.application.bot_data["config"]
+    user = update.effective_user
+    is_allowed = config.allow_public_access or (
+        user is not None and user.id in config.telegram_allowed_user_ids
+    )
+    if is_allowed:
+        return
+    if update.effective_message:
+        await update.effective_message.reply_text("Доступ запрещён.")
+    raise ApplicationHandlerStop
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -80,24 +100,74 @@ async def handle_text(
 ) -> None:
     """Send ordinary text messages to the configured LLM provider."""
     message = update.effective_message
-    if message is None or not message.text:
+    if message is None or message.text is None:
+        return
+    prompt = message.text.strip()
+    if not prompt:
+        await message.reply_text("Сообщение пустое.")
+        return
+    if len(prompt) > MAX_INPUT_LENGTH:
+        await message.reply_text(
+            f"Сообщение слишком длинное. Максимум: {MAX_INPUT_LENGTH} символов."
+        )
         return
 
     ai_client = context.application.bot_data["ai_client"]
-    try:
-        response = await asyncio.to_thread(ai_client.ask, message.text)
-    except LLMConfigurationError:
-        reply = "AI-сервис не настроен. Обратитесь к администратору."
-    except LLMTimeoutError:
-        reply = "AI-сервис не ответил вовремя. Попробуйте ещё раз."
-    except LLMNetworkError:
-        reply = "Не удалось подключиться к AI-сервису. Попробуйте позже."
-    except LLMProviderError:
-        reply = "AI-сервис временно недоступен. Попробуйте позже."
-    except Exception:
-        logger.exception("Unexpected error while handling an AI request")
-        reply = "Произошла внутренняя ошибка. Попробуйте позже."
-    else:
-        reply = response
+    user_id = update.effective_user.id if update.effective_user else 0
+    locks = context.application.bot_data["user_locks"]
+    user_lock = locks.setdefault(user_id, asyncio.Lock())
+    if user_lock.locked():
+        await message.reply_text("Предыдущий запрос ещё обрабатывается.")
+        return
 
-    await message.reply_text(reply)
+    async with user_lock:
+        typing_task = asyncio.create_task(
+            _show_typing(context, update.effective_chat.id)
+        )
+        try:
+            response = await asyncio.to_thread(ai_client.ask, prompt)
+        except LLMConfigurationError:
+            response = "AI-сервис не настроен. Обратитесь к администратору."
+        except LLMTimeoutError:
+            response = "AI-сервис не ответил вовремя. Попробуйте ещё раз."
+        except LLMNetworkError:
+            response = "Не удалось подключиться к AI-сервису. Попробуйте позже."
+        except LLMProviderError:
+            response = "AI-сервис временно недоступен. Попробуйте позже."
+        except Exception:
+            logger.exception("Unexpected error while handling an AI request")
+            response = "Произошла внутренняя ошибка. Попробуйте позже."
+        finally:
+            typing_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await typing_task
+
+        for chunk in _split_message(response):
+            await message.reply_text(chunk)
+
+
+async def _show_typing(
+    context: ContextTypes.DEFAULT_TYPE, chat_id: int
+) -> None:
+    """Refresh Telegram's typing indicator until cancelled."""
+    while True:
+        try:
+            await context.bot.send_chat_action(
+                chat_id=chat_id, action=ChatAction.TYPING
+            )
+        except Exception as error:
+            logger.warning(
+                "Could not send typing indicator: %s", type(error).__name__
+            )
+            return
+        await asyncio.sleep(4)
+
+
+def _split_message(text: str) -> list[str]:
+    """Split a response into Telegram-safe chunks."""
+    if not text:
+        return ["AI-сервис вернул пустой ответ."]
+    return [
+        text[index : index + TELEGRAM_MESSAGE_LIMIT]
+        for index in range(0, len(text), TELEGRAM_MESSAGE_LIMIT)
+    ]

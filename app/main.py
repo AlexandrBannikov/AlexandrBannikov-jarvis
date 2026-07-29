@@ -10,13 +10,13 @@ from app.config import load_config
 LOG_FORMAT = "%(asctime)s | %(levelname)s | %(name)s | %(message)s"
 
 
-def configure_logging() -> None:
+def configure_logging(log_level: str = "INFO") -> None:
     """Write application logs to stdout and logs/jarvis.log."""
     log_directory = Path("logs")
     log_directory.mkdir(parents=True, exist_ok=True)
 
     logging.basicConfig(
-        level=logging.INFO,
+        level=getattr(logging, log_level),
         format=LOG_FORMAT,
         handlers=[
             logging.StreamHandler(sys.stdout),
@@ -28,9 +28,9 @@ def configure_logging() -> None:
 
 def main() -> None:
     """Start Jarvis using Telegram long polling."""
-    configure_logging()
-    logger = logging.getLogger(__name__)
     config = load_config()
+    configure_logging(config.log_level)
+    logger = logging.getLogger(__name__)
     application = build_application(config)
     logger.info("Starting Jarvis Telegram bot")
     application.run_polling()

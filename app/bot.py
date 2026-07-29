@@ -4,13 +4,16 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters
 
 from app.ai.client import AIClient
 from app.config import Config
-from app.handlers import handle_text, help_command, ping, start, status
+from app.handlers import authorize, handle_text, help_command, ping, start, status
 
 
 def build_application(config: Config) -> Application:
     """Build the Telegram application and register command handlers."""
     application = Application.builder().token(config.telegram_bot_token).build()
+    application.bot_data["config"] = config
     application.bot_data["ai_client"] = AIClient(config)
+    application.bot_data["user_locks"] = {}
+    application.add_handler(MessageHandler(filters.ALL, authorize), group=-1)
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("ping", ping))
