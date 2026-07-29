@@ -27,6 +27,18 @@ class LLMAuthenticationError(LLMError):
     """The provider rejected configured credentials."""
 
 
+class LLMPermissionError(LLMError):
+    """The provider denied access to the requested operation."""
+
+
+class LLMBadRequestError(LLMError):
+    """The provider rejected the request parameters."""
+
+
+class LLMModelUnavailableError(LLMError):
+    """The requested model is unavailable to this account."""
+
+
 class LLMProviderError(LLMError):
     """The provider rejected or failed the request."""
 

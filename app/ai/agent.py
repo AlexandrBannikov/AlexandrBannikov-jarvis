@@ -10,8 +10,11 @@ from typing import Any
 from app.ai.prompts import JARVIS_SYSTEM_PROMPT
 from app.ai.provider import (
     LLMAuthenticationError,
+    LLMBadRequestError,
     LLMConfigurationError,
+    LLMModelUnavailableError,
     LLMNetworkError,
+    LLMPermissionError,
     LLMProviderError,
     LLMRateLimitError,
     LLMTimeoutError,
@@ -127,19 +130,19 @@ class JarvisAgent:
             return "AI-сервис не настроен. Обратитесь к администратору."
         except LLMAuthenticationError:
             error_type = "authentication_error"
-            return "AI-сервис отклонил учётные данные. Обратитесь к администратору."
+            return "Ошибка авторизации AI-сервиса. Обратитесь к администратору."
+        except LLMPermissionError:
+            error_type = "permission_denied"
+            return "Выбранная модель недоступна для этого проекта."
+        except (LLMBadRequestError, LLMModelUnavailableError):
+            error_type = "model_unavailable"
+            return "Выбранная модель недоступна. Обратитесь к администратору."
         except LLMRateLimitError:
             error_type = "rate_limit"
-            return "AI-сервис временно ограничил запросы. Попробуйте позже."
-        except LLMTimeoutError:
+            return "Превышен лимит OpenAI. Попробуйте позже."
+        except (LLMTimeoutError, LLMNetworkError, LLMProviderError):
             error_type = "timeout"
-            return "AI-сервис не ответил вовремя. Попробуйте ещё раз."
-        except LLMNetworkError:
-            error_type = "network_error"
-            return "Не удалось подключиться к AI-сервису. Попробуйте позже."
-        except LLMProviderError:
-            error_type = "provider_error"
-            return "AI-сервис временно недоступен. Попробуйте позже."
+            return "Временная ошибка OpenAI. Попробуйте позже."
         except Exception:
             error_type = "internal_error"
             logger.exception("Unexpected Jarvis agent error")

@@ -4,17 +4,54 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import pytest
-from openai import APIConnectionError, APITimeoutError, InternalServerError
+from openai import (
+    APIConnectionError,
+    APITimeoutError,
+    AuthenticationError,
+    BadRequestError,
+    InternalServerError,
+    NotFoundError,
+    PermissionDeniedError,
+    RateLimitError,
+)
 
-from app.ai.openai_provider import OpenAIProvider
+from app.ai.openai_provider import (
+    DEFAULT_OPENAI_BASE_URL,
+    DEFAULT_OPENAI_MODEL,
+    OPENAI_MAX_RETRIES,
+    OpenAIProvider,
+    _exception_chain,
+)
 from app.ai.provider import (
     LLMAuthenticationError,
+    LLMBadRequestError,
     LLMConfigurationError,
+    LLMModelUnavailableError,
     LLMNetworkError,
+    LLMPermissionError,
     LLMProviderError,
     LLMTimeoutError,
     LLMRateLimitError,
 )
+
+
+def sdk_response(status_code: int) -> Mock:
+    return Mock(
+        status_code=status_code,
+        headers={"x-request-id": f"request-{status_code}"},
+        request=Mock(),
+    )
+
+
+def test_exception_chain_contains_only_type_names() -> None:
+    inner = OSError("private network details")
+    outer = APIConnectionError(request=Mock())
+    outer.__cause__ = inner
+
+    result = _exception_chain(outer)
+
+    assert result == "APIConnectionError->OSError"
+    assert "private network details" not in result
 
 
 def test_openai_provider_requires_api_key() -> None:
@@ -22,6 +59,23 @@ def test_openai_provider_requires_api_key() -> None:
 
     with pytest.raises(LLMConfigurationError, match="OPENAI_API_KEY"):
         provider.generate_response("hello")
+
+
+@patch("app.ai.openai_provider.OpenAI")
+def test_empty_environment_base_url_uses_official_endpoint(
+    openai_class: Mock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("OPENAI_BASE_URL", "")
+    provider = OpenAIProvider(api_key="key", model="test-model")
+
+    provider._get_client()
+
+    openai_class.assert_called_once_with(
+        api_key="key",
+        timeout=30.0,
+        max_retries=OPENAI_MAX_RETRIES,
+        base_url=DEFAULT_OPENAI_BASE_URL,
+    )
 
 
 @patch("app.ai.openai_provider.OpenAI")
@@ -40,7 +94,7 @@ def test_openai_provider_uses_responses_api(openai_class: Mock) -> None:
     openai_class.assert_called_once_with(
         api_key="key",
         timeout=30.0,
-        max_retries=1,
+        max_retries=OPENAI_MAX_RETRIES,
         base_url="https://example.test/v1",
     )
     client.responses.create.assert_called_once_with(
@@ -83,36 +137,108 @@ def test_create_response_supports_current_tool_flow() -> None:
 
 
 @pytest.mark.parametrize(
-    ("sdk_error_name", "expected_error"),
+    ("sdk_error", "expected_error"),
     [
-        ("timeout", LLMTimeoutError),
-        ("connection", LLMNetworkError),
-        ("rate_limit", LLMRateLimitError),
-        ("authentication", LLMAuthenticationError),
+        (
+            AuthenticationError(
+                "denied", response=sdk_response(401), body=None
+            ),
+            LLMAuthenticationError,
+        ),
+        (
+            PermissionDeniedError(
+                "denied", response=sdk_response(403), body=None
+            ),
+            LLMPermissionError,
+        ),
+        (
+            BadRequestError(
+                "bad request", response=sdk_response(400), body=None
+            ),
+            LLMBadRequestError,
+        ),
+        (
+            NotFoundError(
+                "not found", response=sdk_response(404), body=None
+            ),
+            LLMModelUnavailableError,
+        ),
+        (
+            RateLimitError(
+                "limited", response=sdk_response(429), body=None
+            ),
+            LLMRateLimitError,
+        ),
+        (APITimeoutError(request=Mock()), LLMTimeoutError),
+        (APIConnectionError(request=Mock()), LLMNetworkError),
+        (
+            InternalServerError(
+                "failed", response=sdk_response(500), body=None
+            ),
+            LLMProviderError,
+        ),
     ],
 )
-def test_create_response_translates_errors(
-    sdk_error_name: str, expected_error: type[Exception]
+def test_create_response_translates_each_sdk_error(
+    sdk_error: Exception, expected_error: type[Exception]
 ) -> None:
-    from openai import AuthenticationError, RateLimitError
-
-    response = Mock(status_code=429, headers=Mock(), request=Mock())
-    errors = {
-        "timeout": APITimeoutError(request=Mock()),
-        "connection": APIConnectionError(request=Mock()),
-        "rate_limit": RateLimitError(
-            "limited", response=response, body=None
-        ),
-        "authentication": AuthenticationError(
-            "denied", response=response, body=None
-        ),
-    }
-    provider = OpenAIProvider(api_key="key", model="test-model")
+    provider = OpenAIProvider(api_key="key", model=DEFAULT_OPENAI_MODEL)
     provider._client = Mock()
-    provider._client.responses.create.side_effect = errors[sdk_error_name]
+    provider._client.responses.create.side_effect = sdk_error
 
     with pytest.raises(expected_error):
         provider.create_response([])
+
+
+@pytest.mark.parametrize(
+    "sdk_error",
+    [
+        PermissionDeniedError(
+            "model denied", response=sdk_response(403), body=None
+        ),
+        NotFoundError(
+            "model missing", response=sdk_response(404), body=None
+        ),
+    ],
+)
+def test_unavailable_configured_model_falls_back(
+    sdk_error: Exception,
+) -> None:
+    provider = OpenAIProvider(api_key="key", model="unavailable-model")
+    provider._client = Mock()
+    expected = SimpleNamespace(
+        id="response-fallback", _request_id="request-fallback"
+    )
+    provider._client.responses.create.side_effect = [sdk_error, expected]
+
+    actual = provider.create_response([])
+
+    assert actual is expected
+    assert provider.model == DEFAULT_OPENAI_MODEL
+    assert (
+        provider._client.responses.create.call_args_list[1].kwargs["model"]
+        == DEFAULT_OPENAI_MODEL
+    )
+
+
+def test_request_log_contains_metadata_but_not_content(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    provider = OpenAIProvider(api_key="key", model="test-model")
+    provider._client = Mock()
+    provider._client.responses.create.return_value = SimpleNamespace(
+        output_text="private response",
+        _request_id="request-safe",
+    )
+
+    with caplog.at_level("INFO", logger="app.ai.openai_provider"):
+        provider.generate_response("private prompt")
+
+    assert "provider=openai model=test-model" in caplog.text
+    assert "endpoint=/v1/responses status=200" in caplog.text
+    assert "request_id=request-safe" in caplog.text
+    assert "private prompt" not in caplog.text
+    assert "private response" not in caplog.text
 
 
 @pytest.mark.parametrize(

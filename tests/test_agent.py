@@ -14,7 +14,10 @@ from app.ai.agent import (
 )
 from app.ai.provider import (
     LLMAuthenticationError,
+    LLMBadRequestError,
+    LLMModelUnavailableError,
     LLMNetworkError,
+    LLMPermissionError,
     LLMRateLimitError,
     LLMTimeoutError,
 )
@@ -229,10 +232,13 @@ def test_empty_final_response_has_safe_message() -> None:
 @pytest.mark.parametrize(
     ("error", "message_part"),
     [
-        (LLMTimeoutError(), "не ответил вовремя"),
-        (LLMRateLimitError(), "ограничил запросы"),
-        (LLMAuthenticationError(), "учётные данные"),
-        (LLMNetworkError(), "подключиться"),
+        (LLMTimeoutError(), "Временная ошибка OpenAI"),
+        (LLMRateLimitError(), "Превышен лимит OpenAI"),
+        (LLMAuthenticationError(), "Ошибка авторизации"),
+        (LLMNetworkError(), "Временная ошибка OpenAI"),
+        (LLMPermissionError(), "недоступна для этого проекта"),
+        (LLMBadRequestError(), "модель недоступна"),
+        (LLMModelUnavailableError(), "модель недоступна"),
     ],
 )
 def test_provider_errors_are_safe(error: Exception, message_part: str) -> None:

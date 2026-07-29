@@ -8,14 +8,21 @@ from openai import (
     APIError,
     APITimeoutError,
     AuthenticationError,
+    BadRequestError,
+    InternalServerError,
+    NotFoundError,
     OpenAI,
+    PermissionDeniedError,
     RateLimitError,
 )
 
 from app.ai.provider import (
+    LLMBadRequestError,
     LLMConfigurationError,
     LLMAuthenticationError,
+    LLMModelUnavailableError,
     LLMNetworkError,
+    LLMPermissionError,
     LLMProvider,
     LLMProviderError,
     LLMTimeoutError,
@@ -23,6 +30,48 @@ from app.ai.provider import (
 )
 
 logger = logging.getLogger(__name__)
+DEFAULT_OPENAI_MODEL = "gpt-5.6-sol"
+DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
+RESPONSES_ENDPOINT = "/v1/responses"
+OPENAI_MAX_RETRIES = 3
+
+
+def _request_id(error_or_response: object) -> str:
+    request_id = getattr(error_or_response, "request_id", None)
+    if not request_id:
+        response = getattr(error_or_response, "response", None)
+        headers = getattr(response, "headers", None)
+        if headers:
+            request_id = headers.get("x-request-id")
+    if not request_id:
+        request_id = getattr(error_or_response, "_request_id", None)
+    value = str(request_id or "none")
+    if len(value) <= 128 and all(
+        character.isalnum() or character in "-_"
+        for character in value
+    ):
+        return value
+    return "invalid"
+
+
+def _status_code(error: Exception) -> int | str:
+    value = getattr(error, "status_code", None)
+    return value if isinstance(value, int) else "none"
+
+
+def _exception_chain(error: BaseException) -> str:
+    """Return exception class names only, never exception messages."""
+    names: list[str] = []
+    current: BaseException | None = error
+    while current is not None and len(names) < 6:
+        name = type(current).__name__
+        names.append(
+            name
+            if name.replace("_", "").isalnum() and len(name) <= 80
+            else "InvalidExceptionType"
+        )
+        current = current.__cause__ or current.__context__
+    return "->".join(names)
 
 
 class OpenAIProvider(LLMProvider):
@@ -40,7 +89,11 @@ class OpenAIProvider(LLMProvider):
         self.base_url = base_url
         self.timeout = timeout
         self._client: OpenAI | None = None
-        logger.info("Configured OpenAI provider with model=%s", model)
+        logger.info(
+            "Configured LLM provider: provider=openai model=%s endpoint=%s",
+            model,
+            RESPONSES_ENDPOINT,
+        )
 
     def _get_client(self) -> OpenAI:
         if not self.api_key:
@@ -49,46 +102,21 @@ class OpenAIProvider(LLMProvider):
             options: dict[str, object] = {
                 "api_key": self.api_key,
                 "timeout": self.timeout,
-                "max_retries": 1,
+                "max_retries": OPENAI_MAX_RETRIES,
+                # Override an empty OPENAI_BASE_URL inherited by the SDK.
+                "base_url": self.base_url or DEFAULT_OPENAI_BASE_URL,
             }
-            if self.base_url:
-                options["base_url"] = self.base_url
             self._client = OpenAI(**options)
         return self._client
 
     def generate_response(
         self, prompt: str, system_prompt: str | None = None
     ) -> str:
-        started_at = time.monotonic()
-        try:
-            request: dict[str, object] = {
-                "model": self.model,
-                "input": prompt,
-            }
-            if system_prompt:
-                request["instructions"] = system_prompt
-            response = self._get_client().responses.create(**request)
-            return response.output_text
-        except LLMConfigurationError:
-            logger.error("OpenAI provider is missing its API key")
-            raise
-        except APITimeoutError as error:
-            logger.warning("OpenAI request timed out")
-            raise LLMTimeoutError("OpenAI request timed out") from error
-        except APIConnectionError as error:
-            logger.warning("OpenAI network error: %s", type(error).__name__)
-            raise LLMNetworkError("Could not connect to OpenAI") from error
-        except APIError as error:
-            logger.error("OpenAI API error: %s", type(error).__name__)
-            raise LLMProviderError("OpenAI API request failed") from error
-        except Exception:
-            logger.exception("Unexpected OpenAI provider error")
-            raise
-        finally:
-            logger.info(
-                "OpenAI request completed in %.3f seconds",
-                time.monotonic() - started_at,
-            )
+        request: dict[str, object] = {"input": prompt}
+        if system_prompt:
+            request["instructions"] = system_prompt
+        response = self._create(**request)
+        return response.output_text
 
     def create_response(
         self,
@@ -100,11 +128,7 @@ class OpenAIProvider(LLMProvider):
         instructions: str | None = None,
     ) -> object:
         """Create a non-streaming Responses API response with optional tools."""
-        request: dict[str, object] = {
-            "model": self.model,
-            "input": input_items,
-            "stream": False,
-        }
+        request: dict[str, object] = {"input": input_items, "stream": False}
         if instructions:
             request["instructions"] = instructions
         if tools is not None:
@@ -112,19 +136,91 @@ class OpenAIProvider(LLMProvider):
             request["tool_choice"] = tool_choice
         if previous_response_id:
             request["previous_response_id"] = previous_response_id
+        return self._create(**request)
+
+    def _create(self, **request: object) -> object:
+        """Call Responses API with safe telemetry and a model fallback."""
+        started_at = time.monotonic()
+        model = self.model
         try:
-            return self._get_client().responses.create(**request)
+            try:
+                response = self._get_client().responses.create(
+                    model=model, **request
+                )
+            except (PermissionDeniedError, NotFoundError) as error:
+                if model == DEFAULT_OPENAI_MODEL:
+                    raise
+                logger.warning(
+                    "OpenAI model fallback: provider=openai model=%s "
+                    "fallback_model=%s status=%s request_id=%s "
+                    "error_type=%s",
+                    model,
+                    DEFAULT_OPENAI_MODEL,
+                    _status_code(error),
+                    _request_id(error),
+                    type(error).__name__,
+                )
+                model = DEFAULT_OPENAI_MODEL
+                response = self._get_client().responses.create(
+                    model=model, **request
+                )
+                self.model = model
+            logger.info(
+                "OpenAI request succeeded: provider=openai model=%s "
+                "endpoint=%s status=200 request_id=%s duration_ms=%.3f",
+                model,
+                RESPONSES_ENDPOINT,
+                _request_id(response),
+                (time.monotonic() - started_at) * 1_000,
+            )
+            return response
         except LLMConfigurationError:
+            logger.error(
+                "OpenAI request failed: provider=openai model=%s "
+                "endpoint=%s status=none request_id=none "
+                "error_type=LLMConfigurationError duration_ms=%.3f",
+                model,
+                RESPONSES_ENDPOINT,
+                (time.monotonic() - started_at) * 1_000,
+            )
             raise
-        except APITimeoutError as error:
-            raise LLMTimeoutError("OpenAI request timed out") from error
-        except RateLimitError as error:
-            raise LLMRateLimitError("OpenAI rate limit reached") from error
-        except AuthenticationError as error:
-            raise LLMAuthenticationError(
-                "OpenAI authentication failed"
-            ) from error
-        except APIConnectionError as error:
-            raise LLMNetworkError("Could not connect to OpenAI") from error
         except APIError as error:
-            raise LLMProviderError("OpenAI API request failed") from error
+            logger.error(
+                "OpenAI request failed: provider=openai model=%s "
+                "endpoint=%s status=%s request_id=%s error_type=%s "
+                "error_chain=%s duration_ms=%.3f",
+                model,
+                RESPONSES_ENDPOINT,
+                _status_code(error),
+                _request_id(error),
+                type(error).__name__,
+                _exception_chain(error),
+                (time.monotonic() - started_at) * 1_000,
+            )
+            if isinstance(error, AuthenticationError):
+                translated = LLMAuthenticationError(
+                    "OpenAI authentication failed"
+                )
+            elif isinstance(error, PermissionDeniedError):
+                translated = LLMPermissionError("OpenAI permission denied")
+            elif isinstance(error, NotFoundError):
+                translated = LLMModelUnavailableError(
+                    "OpenAI model unavailable"
+                )
+            elif isinstance(error, BadRequestError):
+                translated = LLMBadRequestError("OpenAI request rejected")
+            elif isinstance(error, RateLimitError):
+                translated = LLMRateLimitError("OpenAI rate limit reached")
+            elif isinstance(error, APITimeoutError):
+                translated = LLMTimeoutError("OpenAI request timed out")
+            elif isinstance(error, APIConnectionError):
+                translated = LLMNetworkError("Could not connect to OpenAI")
+            elif isinstance(error, InternalServerError):
+                translated = LLMProviderError(
+                    "OpenAI internal server error"
+                )
+            else:
+                translated = LLMProviderError(
+                    "OpenAI API request failed"
+                )
+            raise translated from error
