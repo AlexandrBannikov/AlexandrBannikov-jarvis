@@ -106,6 +106,35 @@ def test_load_config_reads_max_tool_rounds(
     assert load_config().max_tool_rounds == 6
 
 
+def test_load_config_reads_rollout_settings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "test-token")
+    monkeypatch.setenv("TELEGRAM_ALLOWED_USER_IDS", "123")
+    monkeypatch.setenv("JARVIS_SSH_MODE", "real")
+    monkeypatch.setenv("HEALTH_HOST", "127.0.0.2")
+    monkeypatch.setenv("HEALTH_PORT", "9000")
+    monkeypatch.setenv("TELEGRAM_STARTUP_NOTIFICATION", "true")
+
+    config = load_config()
+
+    assert config.jarvis_ssh_mode == "real"
+    assert config.health_host == "127.0.0.2"
+    assert config.health_port == 9000
+    assert config.telegram_startup_notification is True
+
+
+def test_load_config_rejects_invalid_ssh_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "test-token")
+    monkeypatch.setenv("TELEGRAM_ALLOWED_USER_IDS", "123")
+    monkeypatch.setenv("JARVIS_SSH_MODE", "unsafe")
+
+    with pytest.raises(RuntimeError, match="JARVIS_SSH_MODE"):
+        load_config()
+
+
 @pytest.mark.parametrize("value", ["0", "11", "not-a-number"])
 def test_load_config_rejects_invalid_max_tool_rounds(
     monkeypatch: pytest.MonkeyPatch, value: str

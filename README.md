@@ -60,13 +60,18 @@ API-ключи и полные ответы модели в журнал не з
 
 ```dotenv
 LLM_PROVIDER=openai
-OPENAI_API_KEY=sk-your-key
+OPENAI_API_KEY=
 OPENAI_MODEL=gpt-5.5
 OPENAI_BASE_URL=
 MAX_TOOL_ROUNDS=4
 LOG_LEVEL=INFO
 TELEGRAM_ALLOWED_USER_IDS=123456789
 ALLOW_PUBLIC_ACCESS=false
+JARVIS_HOSTS_CONFIG=/etc/jarvis/hosts.yaml
+JARVIS_SSH_MODE=mock
+HEALTH_HOST=127.0.0.1
+HEALTH_PORT=8090
+TELEGRAM_STARTUP_NOTIFICATION=false
 ```
 
 Переменные окружения:
@@ -87,6 +92,11 @@ ALLOW_PUBLIC_ACCESS=false
   `false`; включать его следует только осознанно.
 - `JARVIS_HOSTS_CONFIG` — необязательный путь к строгой YAML-конфигурации
   удалённых серверов; по умолчанию `/etc/jarvis/hosts.yaml`.
+- `JARVIS_SSH_MODE` — `mock` для первого запуска без SSH или `real` после
+  ручной установки и проверки ключей и `known_hosts`.
+- `HEALTH_HOST`, `HEALTH_PORT` — локальный health endpoint.
+- `TELEGRAM_STARTUP_NOTIFICATION` — одно короткое уведомление первому ID из
+  allowlist после успешного старта.
 
 OpenAI подключён через официальный современный SDK и Responses API. Сетевой
 запрос ограничен таймаутом в 30 секунд.
@@ -179,7 +189,8 @@ python scripts/demo_agent_flow.py
 ## systemd
 
 Production-конфигурация хранится в `/etc/jarvis/jarvis.env` с владельцем
-`root:root` и правами `600`. Каталог `/etc/jarvis` имеет права `750`.
+`root:jarvis` и правами `640`. Каталог `/etc/jarvis` имеет владельца
+`root:jarvis` и права `750`.
 Создайте файл вручную по образцу `.env.example` или запустите установщик,
 который создаст только шаблон с пустыми секретами:
 
@@ -215,6 +226,46 @@ tail -n 100 /opt/jarvis/logs/jarvis.log
 
 Unit запускается без root-доступа и использует systemd hardening. Запись
 разрешена только в `/opt/jarvis/logs` и `/opt/jarvis/data`.
+
+## Контролируемый первый production-запуск
+
+Секреты вводятся только непосредственно на сервере. Не отправляйте их в чат,
+issue, журнал или Git. ChatGPT Plus не включает OpenAI API: API имеет отдельный
+биллинг и лимиты.
+
+1. Создайте Telegram-бота через BotFather.
+2. Узнайте свой числовой Telegram user ID.
+3. Создайте OpenAI API key в кабинете OpenAI.
+4. Выполните `sudo python scripts/production_rollout.py prepare`.
+5. Вручную откройте `/etc/jarvis/jarvis.env`.
+6. Введите секреты непосредственно на сервере.
+7. Выполните `sudo python scripts/production_rollout.py validate`.
+8. Выполните `sudo python scripts/production_rollout.py install`.
+9. Запустите `python scripts/smoke_test.py --offline`.
+10. При желании явно выполните `python scripts/smoke_test.py --live`.
+11. Выполните `sudo python scripts/production_rollout.py start`.
+12. Проверьте `python scripts/production_rollout.py status`.
+13. Напишите боту `/health`, затем отправьте обычное сообщение.
+
+Дополнительные безопасные команды:
+
+```bash
+sudo python scripts/production_rollout.py rollback
+python scripts/check_secrets.py
+```
+
+`prepare` не перезаписывает настройки и не создаёт SSH-ключи. `install` не
+запускает сервис. `rollback` сохраняет env, hosts, known_hosts, ключи, данные
+и логи.
+
+Для первого запуска оставьте `JARVIS_SSH_MODE=mock`. Включайте `real` только
+после ручной установки private keys и проверки fingerprints доверенным
+каналом. Сначала рекомендуется проверить Telegram и OpenAI, и лишь затем
+отдельно переключать SSH в real mode.
+
+Live smoke test никогда не запускается unit-тестами или rollout автоматически.
+Он делает минимальные Telegram `getMe` и OpenAI-запрос, а SSH-проверку — только
+при явном `--live`, real mode и указанном host alias.
 
 ## Безопасный удалённый мониторинг
 

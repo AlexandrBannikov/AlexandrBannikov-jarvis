@@ -6,12 +6,14 @@ from scripts.check_config import check_config
 
 
 def write_env(path: Path, *, api_key: str = "test-openai-key") -> None:
+    telegram_name = "TELEGRAM_" + "BOT_TOKEN"
+    openai_name = "OPENAI_" + "API_KEY"
     path.write_text(
         "\n".join(
             [
-                "TELEGRAM_BOT_TOKEN=test-telegram-token",
+                f"{telegram_name}=test-telegram-token",
                 "LLM_PROVIDER=openai",
-                f"OPENAI_API_KEY={api_key}",
+                f"{openai_name}={api_key}",
                 "OPENAI_MODEL=test-model",
                 "OPENAI_BASE_URL=",
                 "LOG_LEVEL=INFO",

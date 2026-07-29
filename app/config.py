@@ -22,6 +22,10 @@ class Config:
     allow_public_access: bool = False
     jarvis_hosts_config: Path = Path("/etc/jarvis/hosts.yaml")
     max_tool_rounds: int = 4
+    jarvis_ssh_mode: str = "mock"
+    health_host: str = "127.0.0.1"
+    health_port: int = 8090
+    telegram_startup_notification: bool = False
 
 
 def _parse_boolean(value: str, name: str) -> bool:
@@ -57,6 +61,16 @@ def _parse_max_tool_rounds(value: str) -> int:
     return rounds
 
 
+def _parse_port(value: str) -> int:
+    try:
+        port = int(value)
+    except ValueError as error:
+        raise RuntimeError("HEALTH_PORT must be an integer") from error
+    if not 1 <= port <= 65535:
+        raise RuntimeError("HEALTH_PORT is outside the allowed range")
+    return port
+
+
 def load_config(environment: Mapping[str, str] | None = None) -> Config:
     """Load and validate application configuration."""
     values = os.environ if environment is None else environment
@@ -89,6 +103,9 @@ def load_config(environment: Mapping[str, str] | None = None) -> Config:
         )
 
     base_url = values.get("OPENAI_BASE_URL", "").strip() or None
+    ssh_mode = values.get("JARVIS_SSH_MODE", "mock").strip().lower()
+    if ssh_mode not in {"mock", "real"}:
+        raise RuntimeError("JARVIS_SSH_MODE must be mock or real")
     return Config(
         telegram_bot_token=token,
         llm_provider=provider,
@@ -106,5 +123,13 @@ def load_config(environment: Mapping[str, str] | None = None) -> Config:
         ),
         max_tool_rounds=_parse_max_tool_rounds(
             values.get("MAX_TOOL_ROUNDS", "4").strip()
+        ),
+        jarvis_ssh_mode=ssh_mode,
+        health_host=values.get("HEALTH_HOST", "127.0.0.1").strip()
+        or "127.0.0.1",
+        health_port=_parse_port(values.get("HEALTH_PORT", "8090").strip()),
+        telegram_startup_notification=_parse_boolean(
+            values.get("TELEGRAM_STARTUP_NOTIFICATION", "false"),
+            "TELEGRAM_STARTUP_NOTIFICATION",
         ),
     )

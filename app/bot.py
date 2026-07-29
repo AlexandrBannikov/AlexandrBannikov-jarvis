@@ -1,5 +1,7 @@
 """Telegram bot construction."""
 
+import logging
+
 from telegram.ext import Application, CommandHandler, MessageHandler, filters
 
 from app.ai.client import AIClient
@@ -8,6 +10,7 @@ from app.config import Config
 from app.handlers import (
     authorize,
     handle_text,
+    health_command,
     help_command,
     ping,
     run_tool,
@@ -17,10 +20,37 @@ from app.handlers import (
 )
 from app.tools import create_default_tool_manager
 
+logger = logging.getLogger(__name__)
+
+
+async def send_startup_notification(application: Application) -> None:
+    """Send one best-effort notification to the first allowlisted user."""
+    config = application.bot_data["config"]
+    if (
+        not config.telegram_startup_notification
+        or not config.telegram_allowed_user_ids
+    ):
+        return
+    user_id = min(config.telegram_allowed_user_ids)
+    try:
+        await application.bot.send_message(
+            chat_id=user_id,
+            text="Jarvis запущен и готов к работе.",
+        )
+    except Exception as error:
+        logger.warning(
+            "Startup notification failed: %s", type(error).__name__
+        )
+
 
 def build_application(config: Config) -> Application:
     """Build the Telegram application and register command handlers."""
-    application = Application.builder().token(config.telegram_bot_token).build()
+    application = (
+        Application.builder()
+        .token(config.telegram_bot_token)
+        .post_init(send_startup_notification)
+        .build()
+    )
     application.bot_data["config"] = config
     ai_client = AIClient(config)
     application.bot_data["ai_client"] = ai_client
@@ -38,6 +68,7 @@ def build_application(config: Config) -> Application:
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("ping", ping))
+    application.add_handler(CommandHandler("health", health_command))
     application.add_handler(CommandHandler("status", status))
     application.add_handler(CommandHandler("tool", run_tool))
     application.add_handler(CommandHandler("tools", tools_command))

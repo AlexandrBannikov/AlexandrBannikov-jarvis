@@ -6,6 +6,8 @@ import sys
 
 from app.bot import build_application
 from app.config import load_config
+from app.health import HealthServer
+from app.startup import startup_self_check
 
 LOG_FORMAT = "%(asctime)s | %(levelname)s | %(name)s | %(message)s"
 
@@ -40,9 +42,15 @@ def main() -> None:
     config = load_config()
     configure_logging(config.log_level)
     logger = logging.getLogger(__name__)
+    startup_self_check(config)
+    health_server = HealthServer(config.health_host, config.health_port)
+    health_server.start()
     application = build_application(config)
     logger.info("Starting Jarvis Telegram bot")
-    application.run_polling()
+    try:
+        application.run_polling()
+    finally:
+        health_server.stop()
 
 
 if __name__ == "__main__":

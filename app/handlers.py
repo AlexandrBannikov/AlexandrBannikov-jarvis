@@ -28,6 +28,7 @@ HELP_MESSAGE = (
     "/start — запустить Jarvis\n"
     "/help — показать доступные команды\n"
     "/ping — проверить доступность\n"
+    "/health — проверить готовность Jarvis\n"
     "/status — показать состояние системы\n"
     "/tool system_info — локальная диагностика\n"
     "/tool remote_system_info <host> — удалённая диагностика\n"
@@ -76,6 +77,15 @@ async def ping(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     del context
     if update.effective_message:
         await update.effective_message.reply_text("Pong")
+
+
+async def health_command(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """Report application readiness without exposing configuration."""
+    del context
+    if update.effective_message:
+        await update.effective_message.reply_text("Jarvis healthy")
 
 
 def _format_uptime(seconds: float) -> str:

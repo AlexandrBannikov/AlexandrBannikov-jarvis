@@ -28,14 +28,14 @@ if ! getent passwd jarvis >/dev/null; then
         jarvis
 fi
 
-install -d -o root -g root -m 0750 "${ENV_DIRECTORY}"
+install -d -o root -g jarvis -m 0750 "${ENV_DIRECTORY}"
 install -d -o root -g jarvis -m 0750 "${KEY_DIRECTORY}"
 if [[ ! -e ${ENV_FILE} ]]; then
-    install -o root -g root -m 0600 \
+    install -o root -g jarvis -m 0640 \
         "${PROJECT_ROOT}/.env.example" "${ENV_FILE}"
 fi
-chown root:root "${ENV_FILE}"
-chmod 0600 "${ENV_FILE}"
+chown root:jarvis "${ENV_FILE}"
+chmod 0640 "${ENV_FILE}"
 
 # Remote monitoring files are intentionally never created or populated here.
 # If an administrator installed them, enforce the documented read-only access.

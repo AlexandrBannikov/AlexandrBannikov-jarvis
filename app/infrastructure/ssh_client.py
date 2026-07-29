@@ -111,6 +111,15 @@ class SSHClient:
             "system_info", _SYSTEM_INFO_COMMAND, stdin_data=_SYSTEM_INFO_SCRIPT
         )
 
+    def test_connection(self) -> bool:
+        """Open and close an authenticated SSH connection without a command."""
+        client = self._client_factory()
+        try:
+            self._connect(client)
+            return True
+        finally:
+            client.close()
+
     def run_service_status(self, service_name: str) -> SSHCommandResult:
         if (
             not SERVICE_PATTERN.fullmatch(service_name)
