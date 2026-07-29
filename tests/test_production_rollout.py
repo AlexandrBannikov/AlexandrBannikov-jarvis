@@ -129,6 +129,30 @@ def test_validate_not_ready_with_empty_allowlist(
     assert ("FAIL", "TELEGRAM_ALLOWED_USER_IDS is empty") in report.checks
 
 
+def test_validate_initializes_enabled_memory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    paths = paths_for(tmp_path)
+    write_valid_environment(paths)
+    with paths.env_file.open("a", encoding="utf-8") as destination:
+        destination.write(
+            "\nMEMORY_ENABLED=true\n"
+            f"MEMORY_DB_PATH={paths.data_dir / 'memory.db'}\n"
+        )
+    paths.data_dir.mkdir()
+    monkeypatch.setattr(rollout, "_owner_ok", lambda path: True)
+    monkeypatch.setattr(rollout, "_port_available", lambda host, port: True)
+
+    report = rollout.validate(paths, emit=False, secret_scan=lambda: [])
+
+    assert report.ready
+    assert (
+        "PASS",
+        "Project memory SQLite schema and migrations",
+    ) in report.checks
+    assert (paths.data_dir / "memory.db").exists()
+
+
 def test_real_ssh_mode_without_key_is_not_ready(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

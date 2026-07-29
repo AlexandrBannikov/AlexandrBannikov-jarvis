@@ -66,6 +66,12 @@ OPENAI_BASE_URL=
 MAX_TOOL_ROUNDS=4
 JARVIS_WEB_SEARCH_ENABLED=false
 JARVIS_WEB_SEARCH_CONTEXT_SIZE=medium
+MEMORY_ENABLED=false
+MEMORY_MAX_CONTEXT=4000
+MEMORY_MAX_RESULTS=7
+MEMORY_AUTOSAVE=true
+MEMORY_SUMMARIZATION=true
+MEMORY_DB_PATH=data/memory.db
 LOG_LEVEL=INFO
 TELEGRAM_ALLOWED_USER_IDS=123456789
 ALLOW_PUBLIC_ACCESS=false
@@ -90,6 +96,14 @@ TELEGRAM_STARTUP_NOTIFICATION=false
   по умолчанию `false`, отдельный поисковый API-ключ не нужен.
 - `JARVIS_WEB_SEARCH_CONTEXT_SIZE` — объём поискового контекста: `low`,
   `medium` или `high`; по умолчанию `medium`.
+- `MEMORY_ENABLED` — явно включает локальную Project Memory; по умолчанию
+  `false`.
+- `MEMORY_MAX_CONTEXT` — максимальный объём релевантного контекста памяти.
+- `MEMORY_MAX_RESULTS` — максимум релевантных записей на запрос (1–10).
+- `MEMORY_AUTOSAVE` — сохраняет только явные долговечные формулировки.
+- `MEMORY_SUMMARIZATION` — создаёт дополнительные локальные summaries при
+  росте памяти, не удаляя исходные записи.
+- `MEMORY_DB_PATH` — путь к локальной SQLite БД.
 - `LOG_LEVEL` — уровень журналирования: `DEBUG`, `INFO`, `WARNING`, `ERROR`
   или `CRITICAL`.
 - `TELEGRAM_ALLOWED_USER_IDS` — разделённый запятыми список разрешённых
@@ -142,6 +156,21 @@ OpenAI подключён через официальный современны
 используется. Ответы поиска содержат видимые названия и HTTP(S)-ссылки
 источников. Запросы с признаками ключей, Bearer-токенов, паролей или приватных
 ключей не получают доступ к web search.
+
+## Project Memory
+
+Project Memory хранится независимо от OpenAI в локальной SQLite БД. Таблица
+`memories` содержит тип, заголовок, содержание, теги, проект, важность,
+источник, счётчики использования и признак активности. Embeddings, внешние
+векторные БД и SaaS не используются.
+
+Перед ответом Jarvis выполняет keyword/tag/project-поиск, ранжирует результаты
+по совпадениям, важности, свежести и частоте использования и добавляет только
+ограниченную релевантную выборку. Доступны model tools `remember`, `forget`,
+`update_memory`, `search_memory` и `list_project_memory`. Удаление мягкое:
+запись становится неактивной. Autosave реагирует только на явные долговечные
+формулировки вроде «Запомни…» и «Мы решили…». Секретоподобное содержимое,
+env-файлы, ключи, пароли, cookies и JWT блокируются до записи.
 
 Параметров `command`, `shell` или произвольного запроса в схемах нет. Модель
 не может изменять состояние серверов. Если подходящего инструмента нет, она

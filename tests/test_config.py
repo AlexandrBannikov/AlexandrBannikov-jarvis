@@ -68,6 +68,12 @@ def test_load_config_uses_llm_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert config.openai_base_url is None
     assert config.web_search_enabled is False
     assert config.web_search_context_size == "medium"
+    assert config.memory_enabled is False
+    assert config.memory_max_context == 4_000
+    assert config.memory_max_results == 7
+    assert config.memory_autosave is True
+    assert config.memory_summarization is True
+    assert config.memory_db_path == Path("data/memory.db")
 
 
 def test_load_config_reads_web_search_settings(
@@ -92,6 +98,49 @@ def test_load_config_rejects_invalid_web_search_context(
     monkeypatch.setenv("JARVIS_WEB_SEARCH_CONTEXT_SIZE", "huge")
 
     with pytest.raises(RuntimeError, match="JARVIS_WEB_SEARCH_CONTEXT_SIZE"):
+        load_config()
+
+
+def test_load_config_reads_memory_settings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "test-token")
+    monkeypatch.setenv("ALLOW_PUBLIC_ACCESS", "true")
+    monkeypatch.setenv("MEMORY_ENABLED", "true")
+    monkeypatch.setenv("MEMORY_MAX_CONTEXT", "8000")
+    monkeypatch.setenv("MEMORY_MAX_RESULTS", "5")
+    monkeypatch.setenv("MEMORY_AUTOSAVE", "false")
+    monkeypatch.setenv("MEMORY_SUMMARIZATION", "false")
+    monkeypatch.setenv("MEMORY_DB_PATH", "/tmp/test-memory.db")
+
+    config = load_config()
+
+    assert config.memory_enabled is True
+    assert config.memory_max_context == 8_000
+    assert config.memory_max_results == 5
+    assert config.memory_autosave is False
+    assert config.memory_summarization is False
+    assert config.memory_db_path == Path("/tmp/test-memory.db")
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        ("MEMORY_MAX_CONTEXT", "499"),
+        ("MEMORY_MAX_CONTEXT", "20001"),
+        ("MEMORY_MAX_RESULTS", "0"),
+        ("MEMORY_MAX_RESULTS", "11"),
+        ("MEMORY_MAX_RESULTS", "invalid"),
+    ],
+)
+def test_load_config_rejects_invalid_memory_limits(
+    monkeypatch: pytest.MonkeyPatch, name: str, value: str
+) -> None:
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "test-token")
+    monkeypatch.setenv("ALLOW_PUBLIC_ACCESS", "true")
+    monkeypatch.setenv(name, value)
+
+    with pytest.raises(RuntimeError, match=name):
         load_config()
 
 

@@ -27,6 +27,7 @@ from app import __version__  # noqa: E402
 from app.config import Config, load_config  # noqa: E402
 from app.health import probe_health  # noqa: E402
 from app.infrastructure.hosts import load_hosts_config  # noqa: E402
+from app.memory import MemoryStorage  # noqa: E402
 from app.startup import startup_self_check  # noqa: E402
 from app.tools import create_default_tool_manager  # noqa: E402
 from scripts.check_secrets import scan_repository  # noqa: E402
@@ -42,6 +43,12 @@ OPENAI_BASE_URL=
 MAX_TOOL_ROUNDS=4
 JARVIS_WEB_SEARCH_ENABLED=false
 JARVIS_WEB_SEARCH_CONTEXT_SIZE=medium
+MEMORY_ENABLED=false
+MEMORY_MAX_CONTEXT=4000
+MEMORY_MAX_RESULTS=7
+MEMORY_AUTOSAVE=true
+MEMORY_SUMMARIZATION=true
+MEMORY_DB_PATH=/opt/jarvis/data/memory.db
 
 JARVIS_SSH_MODE=mock
 JARVIS_HOSTS_CONFIG=/etc/jarvis/hosts.yaml
@@ -324,6 +331,18 @@ def validate(
         report.pass_("OpenAI web search explicitly enabled")
     else:
         report.warn("OpenAI web search disabled")
+    if config is not None and config.memory_enabled:
+        try:
+            memory_storage = MemoryStorage(config.memory_db_path)
+            memory_storage.initialize()
+            if memory_storage.validate_schema():
+                report.pass_("Project memory SQLite schema and migrations")
+            else:
+                report.fail("Project memory SQLite schema and migrations")
+        except Exception:
+            report.fail("Project memory SQLite database writable")
+    else:
+        report.warn("Project memory disabled")
     if not paths.hosts_file.is_file():
         report.fail("hosts.yaml exists")
         hosts = None

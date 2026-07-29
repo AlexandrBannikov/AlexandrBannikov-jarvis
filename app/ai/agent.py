@@ -29,6 +29,7 @@ from app.ai.tool_adapter import (
 )
 from app.tools.manager import ToolManager
 from app.tools.result import ToolResult
+from app.memory.manager import MemoryManager
 
 logger = logging.getLogger(__name__)
 audit_logger = logging.getLogger("jarvis.audit")
@@ -96,6 +97,7 @@ class JarvisAgent:
         run_sync: Callable[..., Awaitable[Any]] = asyncio.to_thread,
         web_search_enabled: bool = False,
         web_search_context_size: str = "medium",
+        memory_manager: MemoryManager | None = None,
     ) -> None:
         if max_tool_rounds < 1:
             raise ValueError("max_tool_rounds must be positive")
@@ -106,6 +108,7 @@ class JarvisAgent:
         self._run_sync = run_sync
         self.web_search_enabled = web_search_enabled
         self.web_search_context_size = web_search_context_size
+        self.memory_manager = memory_manager
 
     async def ask(
         self, user_text: str, user_id: int | None = None
@@ -143,12 +146,25 @@ class JarvisAgent:
             )
             return WEB_SEARCH_SECRET_MESSAGE
         try:
+            instructions = JARVIS_SYSTEM_PROMPT
+            if self.memory_manager is not None:
+                await self._run_sync(
+                    self.memory_manager.autosave, user_text
+                )
+                memory_context = await self._run_sync(
+                    self.memory_manager.relevant_context, user_text
+                )
+                if memory_context:
+                    instructions = (
+                        JARVIS_SYSTEM_PROMPT + "\n\n" + memory_context
+                    )
             response = await self._create_response(
                 input_items=[
                     {"role": "user", "content": user_text},
                 ],
                 tools=self._tool_schemas(allow_web=not contains_secret),
                 tool_choice="auto",
+                instructions=instructions,
             )
             while True:
                 raw_response_id = str(
@@ -226,6 +242,7 @@ class JarvisAgent:
                     ),
                     tool_choice="auto",
                     previous_response_id=raw_response_id,
+                    instructions=instructions,
                 )
         except LLMWebSearchUnsupportedError:
             error_type = "web_search_unsupported"

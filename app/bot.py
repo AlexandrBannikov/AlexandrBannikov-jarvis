@@ -21,6 +21,8 @@ from app.handlers import (
     telegram_error_handler,
     tools_command,
 )
+from app.memory import MemoryManager, MemoryStorage
+from app.memory.tools import register_memory_tools
 from app.tools import create_default_tool_manager
 
 logger = logging.getLogger(__name__)
@@ -60,13 +62,25 @@ def build_application(config: Config) -> Application:
     tool_manager = create_default_tool_manager(
         str(config.jarvis_hosts_config)
     )
+    memory_manager = None
+    if config.memory_enabled:
+        memory_manager = MemoryManager(
+            MemoryStorage(config.memory_db_path),
+            max_results=config.memory_max_results,
+            max_context=config.memory_max_context,
+            autosave=config.memory_autosave,
+            summarization=config.memory_summarization,
+        )
+        register_memory_tools(tool_manager.registry, memory_manager)
     application.bot_data["tool_manager"] = tool_manager
+    application.bot_data["memory_manager"] = memory_manager
     application.bot_data["agent"] = JarvisAgent(
         ai_client.provider,
         tool_manager,
         max_tool_rounds=config.max_tool_rounds,
         web_search_enabled=config.web_search_enabled,
         web_search_context_size=config.web_search_context_size,
+        memory_manager=memory_manager,
     )
     application.bot_data["user_locks"] = {}
     application.add_handler(

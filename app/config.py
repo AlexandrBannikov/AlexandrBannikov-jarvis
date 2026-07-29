@@ -29,6 +29,12 @@ class Config:
     telegram_startup_notification: bool = False
     web_search_enabled: bool = False
     web_search_context_size: str = "medium"
+    memory_enabled: bool = False
+    memory_max_context: int = 4_000
+    memory_max_results: int = 7
+    memory_autosave: bool = True
+    memory_summarization: bool = True
+    memory_db_path: Path = Path("data/memory.db")
 
 
 def _parse_boolean(value: str, name: str) -> bool:
@@ -72,6 +78,18 @@ def _parse_port(value: str) -> int:
     if not 1 <= port <= 65535:
         raise RuntimeError("HEALTH_PORT is outside the allowed range")
     return port
+
+
+def _parse_bounded_int(
+    value: str, name: str, minimum: int, maximum: int
+) -> int:
+    try:
+        parsed = int(value)
+    except ValueError as error:
+        raise RuntimeError(f"{name} must be an integer") from error
+    if not minimum <= parsed <= maximum:
+        raise RuntimeError(f"{name} is outside the allowed range")
+    return parsed
 
 
 def load_config(environment: Mapping[str, str] | None = None) -> Config:
@@ -147,4 +165,30 @@ def load_config(environment: Mapping[str, str] | None = None) -> Config:
             "JARVIS_WEB_SEARCH_ENABLED",
         ),
         web_search_context_size=web_search_context_size,
+        memory_enabled=_parse_boolean(
+            values.get("MEMORY_ENABLED", "false"), "MEMORY_ENABLED"
+        ),
+        memory_max_context=_parse_bounded_int(
+            values.get("MEMORY_MAX_CONTEXT", "4000").strip(),
+            "MEMORY_MAX_CONTEXT",
+            500,
+            20_000,
+        ),
+        memory_max_results=_parse_bounded_int(
+            values.get("MEMORY_MAX_RESULTS", "7").strip(),
+            "MEMORY_MAX_RESULTS",
+            1,
+            10,
+        ),
+        memory_autosave=_parse_boolean(
+            values.get("MEMORY_AUTOSAVE", "true"), "MEMORY_AUTOSAVE"
+        ),
+        memory_summarization=_parse_boolean(
+            values.get("MEMORY_SUMMARIZATION", "true"),
+            "MEMORY_SUMMARIZATION",
+        ),
+        memory_db_path=Path(
+            values.get("MEMORY_DB_PATH", "data/memory.db").strip()
+            or "data/memory.db"
+        ),
     )
