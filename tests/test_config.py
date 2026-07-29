@@ -25,6 +25,7 @@ def test_load_config_reads_token_from_environment(monkeypatch: pytest.MonkeyPatc
     assert config.telegram_allowed_user_ids == frozenset({123, 456})
     assert config.allow_public_access is False
     assert config.jarvis_hosts_config == Path("/etc/jarvis/hosts.yaml")
+    assert config.max_tool_rounds == 4
 
 
 def test_load_config_strips_whitespace(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -93,3 +94,25 @@ def test_load_config_reads_hosts_path(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("JARVIS_HOSTS_CONFIG", "/safe/hosts.yaml")
 
     assert load_config().jarvis_hosts_config == Path("/safe/hosts.yaml")
+
+
+def test_load_config_reads_max_tool_rounds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "test-token")
+    monkeypatch.setenv("ALLOW_PUBLIC_ACCESS", "true")
+    monkeypatch.setenv("MAX_TOOL_ROUNDS", "6")
+
+    assert load_config().max_tool_rounds == 6
+
+
+@pytest.mark.parametrize("value", ["0", "11", "not-a-number"])
+def test_load_config_rejects_invalid_max_tool_rounds(
+    monkeypatch: pytest.MonkeyPatch, value: str
+) -> None:
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "test-token")
+    monkeypatch.setenv("ALLOW_PUBLIC_ACCESS", "true")
+    monkeypatch.setenv("MAX_TOOL_ROUNDS", value)
+
+    with pytest.raises(RuntimeError, match="MAX_TOOL_ROUNDS"):
+        load_config()

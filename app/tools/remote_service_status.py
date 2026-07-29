@@ -54,12 +54,28 @@ class RemoteServiceStatusTool(Tool):
         return {
             "type": "object",
             "properties": {
-                "host_alias": {"type": "string"},
-                "service_name": {"type": "string"},
+                "host_alias": {
+                    "type": "string",
+                    "description": "Configured remote host alias.",
+                },
+                "service_name": {
+                    "type": "string",
+                    "description": "Allowed systemd unit name.",
+                },
             },
             "required": ["host_alias", "service_name"],
             "additionalProperties": False,
         }
+
+    def validate_arguments(self, arguments: dict[str, Any]) -> None:
+        alias = arguments["host_alias"]
+        service = arguments["service_name"]
+        host = self.hosts.get(alias)
+        if (
+            not SERVICE_PATTERN.fullmatch(service)
+            or service not in host.allowed_services
+        ):
+            raise ServiceNotAllowedError("Service is not allowed")
 
     def execute(self, **kwargs: Any) -> dict[str, Any]:
         alias = kwargs.get("host_alias")

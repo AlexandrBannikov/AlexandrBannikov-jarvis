@@ -39,6 +39,7 @@ def make_context(ai_client: Mock | None = None) -> SimpleNamespace:
         application=SimpleNamespace(
             bot_data={
                 "ai_client": ai_client or Mock(),
+                "agent": AsyncMock(),
                 "user_locks": {},
                 "config": SimpleNamespace(
                     allow_public_access=False,
@@ -89,17 +90,17 @@ def test_status_handler_contains_system_information() -> None:
     assert "Uptime:" in message
 
 
-@patch("app.handlers.asyncio.to_thread", new_callable=AsyncMock)
-def test_text_handler_sends_ai_response(to_thread: AsyncMock) -> None:
+def test_text_handler_sends_ai_response() -> None:
     update = make_update()
     update.effective_message.text = "Hello"
-    ai_client = Mock()
-    to_thread.return_value = "AI answer"
-    context = make_context(ai_client)
+    context = make_context()
+    context.application.bot_data["agent"].ask.return_value = "AI answer"
 
     asyncio.run(handle_text(update, context))
 
-    to_thread.assert_awaited_once_with(ai_client.ask, "Hello")
+    context.application.bot_data["agent"].ask.assert_awaited_once_with(
+        "Hello", user_id=123
+    )
     update.effective_message.reply_text.assert_awaited_once_with("AI answer")
 
 
@@ -128,15 +129,13 @@ def test_text_handler_sends_ai_response(to_thread: AsyncMock) -> None:
         ),
     ],
 )
-@patch("app.handlers.asyncio.to_thread", new_callable=AsyncMock)
 def test_text_handler_hides_errors(
-    to_thread: AsyncMock, error: Exception, expected_reply: str
+    error: Exception, expected_reply: str
 ) -> None:
     update = make_update()
     update.effective_message.text = "Hello"
-    ai_client = Mock()
-    to_thread.side_effect = error
-    context = make_context(ai_client)
+    context = make_context()
+    context.application.bot_data["agent"].ask.side_effect = error
 
     asyncio.run(handle_text(update, context))
 
@@ -210,13 +209,12 @@ def test_text_handler_rejects_long_message() -> None:
     assert "слишком длинное" in reply
 
 
-@patch("app.handlers.asyncio.to_thread", new_callable=AsyncMock)
-def test_text_handler_splits_long_response(to_thread: AsyncMock) -> None:
+def test_text_handler_splits_long_response() -> None:
     update = make_update()
     update.effective_message.text = "Hello"
     response = "x" * (TELEGRAM_MESSAGE_LIMIT + 10)
-    to_thread.return_value = response
     context = make_context()
+    context.application.bot_data["agent"].ask.return_value = response
 
     asyncio.run(handle_text(update, context))
 
@@ -352,3 +350,22 @@ def test_run_tool_rejects_arbitrary_command_text() -> None:
 
     reply = update.effective_message.reply_text.await_args.args[0]
     assert "Использование:" in reply
+
+
+def test_tools_command_lists_only_names_and_descriptions() -> None:
+    from app.handlers import tools_command
+
+    update = make_update()
+    context = make_context()
+    tool = SimpleNamespace(name="system_info", description="Safe diagnostics.")
+    context.application.bot_data["tool_manager"] = SimpleNamespace(
+        registry=SimpleNamespace(list_tools=lambda: [tool])
+    )
+
+    asyncio.run(tools_command(update, context))
+
+    reply = update.effective_message.reply_text.await_args.args[0]
+    assert "system_info" in reply
+    assert "Safe diagnostics." in reply
+    assert "command" not in reply.lower()
+    assert "/etc/" not in reply

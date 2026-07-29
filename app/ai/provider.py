@@ -19,6 +19,14 @@ class LLMNetworkError(LLMError):
     """The provider could not be reached."""
 
 
+class LLMRateLimitError(LLMError):
+    """The provider rate limit was reached."""
+
+
+class LLMAuthenticationError(LLMError):
+    """The provider rejected configured credentials."""
+
+
 class LLMProviderError(LLMError):
     """The provider rejected or failed the request."""
 

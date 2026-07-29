@@ -21,6 +21,7 @@ class Config:
     telegram_allowed_user_ids: frozenset[int] = frozenset()
     allow_public_access: bool = False
     jarvis_hosts_config: Path = Path("/etc/jarvis/hosts.yaml")
+    max_tool_rounds: int = 4
 
 
 def _parse_boolean(value: str, name: str) -> bool:
@@ -44,6 +45,16 @@ def _parse_user_ids(value: str) -> frozenset[int]:
     if any(user_id <= 0 for user_id in user_ids):
         raise RuntimeError("TELEGRAM_ALLOWED_USER_IDS must contain positive IDs")
     return user_ids
+
+
+def _parse_max_tool_rounds(value: str) -> int:
+    try:
+        rounds = int(value)
+    except ValueError as error:
+        raise RuntimeError("MAX_TOOL_ROUNDS must be an integer") from error
+    if not 1 <= rounds <= 10:
+        raise RuntimeError("MAX_TOOL_ROUNDS must be between 1 and 10")
+    return rounds
 
 
 def load_config(environment: Mapping[str, str] | None = None) -> Config:
@@ -92,5 +103,8 @@ def load_config(environment: Mapping[str, str] | None = None) -> Config:
                 "JARVIS_HOSTS_CONFIG", "/etc/jarvis/hosts.yaml"
             ).strip()
             or "/etc/jarvis/hosts.yaml"
+        ),
+        max_tool_rounds=_parse_max_tool_rounds(
+            values.get("MAX_TOOL_ROUNDS", "4").strip()
         ),
     )

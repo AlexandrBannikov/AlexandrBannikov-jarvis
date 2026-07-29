@@ -50,10 +50,18 @@ class RemoteSystemInfoTool(Tool):
     def parameters(self) -> dict[str, Any]:
         return {
             "type": "object",
-            "properties": {"host_alias": {"type": "string"}},
+            "properties": {
+                "host_alias": {
+                    "type": "string",
+                    "description": "Configured remote host alias.",
+                }
+            },
             "required": ["host_alias"],
             "additionalProperties": False,
         }
+
+    def validate_arguments(self, arguments: dict[str, Any]) -> None:
+        self.hosts.get(arguments["host_alias"])
 
     def execute(self, **kwargs: Any) -> dict[str, Any]:
         alias = kwargs.get("host_alias")

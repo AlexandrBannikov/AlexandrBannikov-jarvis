@@ -1,0 +1,221 @@
+"""Bounded OpenAI Responses API agent loop for read-only Jarvis tools."""
+
+import asyncio
+import logging
+import re
+import time
+from collections.abc import Awaitable, Callable
+from typing import Any
+
+from app.ai.prompts import JARVIS_SYSTEM_PROMPT
+from app.ai.provider import (
+    LLMAuthenticationError,
+    LLMConfigurationError,
+    LLMNetworkError,
+    LLMProviderError,
+    LLMRateLimitError,
+    LLMTimeoutError,
+)
+from app.ai.tool_adapter import (
+    ToolAdapter,
+    ToolCallValidationError,
+    serialize_tool_result,
+)
+from app.tools.manager import ToolManager
+from app.tools.result import ToolResult
+
+logger = logging.getLogger(__name__)
+audit_logger = logging.getLogger("jarvis.audit")
+MAX_TOOL_ROUNDS = 4
+TOOL_ROUND_LIMIT_MESSAGE = (
+    "Не удалось завершить запрос: превышен лимит вызовов инструментов."
+)
+EMPTY_RESPONSE_MESSAGE = "AI-сервис вернул пустой ответ."
+
+
+def _item_value(item: object, name: str, default: Any = None) -> Any:
+    if isinstance(item, dict):
+        return item.get(name, default)
+    return getattr(item, name, default)
+
+
+def _safe_log_value(value: object) -> str:
+    text = str(value)
+    if len(text) <= 128 and re.fullmatch(r"[A-Za-z0-9_.@:-]+", text):
+        return text
+    return "invalid"
+
+
+class JarvisAgent:
+    """Let OpenAI select from locally validated, read-only tools."""
+
+    def __init__(
+        self,
+        provider: object,
+        tool_manager: ToolManager,
+        *,
+        max_tool_rounds: int = MAX_TOOL_ROUNDS,
+        run_sync: Callable[..., Awaitable[Any]] = asyncio.to_thread,
+    ) -> None:
+        if max_tool_rounds < 1:
+            raise ValueError("max_tool_rounds must be positive")
+        self.provider = provider
+        self.tool_manager = tool_manager
+        self.adapter = ToolAdapter(tool_manager.registry)
+        self.max_tool_rounds = max_tool_rounds
+        self._run_sync = run_sync
+
+    async def ask(
+        self, user_text: str, user_id: int | None = None
+    ) -> str:
+        started_at = time.monotonic()
+        rounds = 0
+        success = False
+        error_type = "none"
+        audit_logger.info(
+            "agent_request_started user_id=%s text_length=%d",
+            user_id,
+            len(user_text),
+        )
+        try:
+            response = await self._create_response(
+                input_items=[
+                    {"role": "user", "content": user_text},
+                ],
+                tools=self.adapter.schemas(),
+                tool_choice="auto",
+            )
+            while True:
+                raw_response_id = str(
+                    getattr(response, "id", "unknown")
+                )
+                response_id = _safe_log_value(raw_response_id)
+                calls = self._function_calls(response)
+                audit_logger.info(
+                    "agent_response user_id=%s response_id=%s "
+                    "tool_rounds=%d tool_calls=%d",
+                    user_id,
+                    response_id,
+                    rounds,
+                    len(calls),
+                )
+                if not calls:
+                    text = str(getattr(response, "output_text", "") or "").strip()
+                    if text:
+                        success = True
+                        return text
+                    error_type = "empty_response"
+                    return EMPTY_RESPONSE_MESSAGE
+                if rounds >= self.max_tool_rounds:
+                    error_type = "tool_round_limit"
+                    return TOOL_ROUND_LIMIT_MESSAGE
+
+                rounds += 1
+                outputs = []
+                for call in calls:
+                    outputs.append(
+                        await self._execute_call(call, user_id=user_id)
+                    )
+                response = await self._create_response(
+                    input_items=outputs,
+                    tools=self.adapter.schemas(),
+                    tool_choice="auto",
+                    previous_response_id=raw_response_id,
+                )
+        except LLMConfigurationError:
+            error_type = "configuration_error"
+            return "AI-сервис не настроен. Обратитесь к администратору."
+        except LLMAuthenticationError:
+            error_type = "authentication_error"
+            return "AI-сервис отклонил учётные данные. Обратитесь к администратору."
+        except LLMRateLimitError:
+            error_type = "rate_limit"
+            return "AI-сервис временно ограничил запросы. Попробуйте позже."
+        except LLMTimeoutError:
+            error_type = "timeout"
+            return "AI-сервис не ответил вовремя. Попробуйте ещё раз."
+        except LLMNetworkError:
+            error_type = "network_error"
+            return "Не удалось подключиться к AI-сервису. Попробуйте позже."
+        except LLMProviderError:
+            error_type = "provider_error"
+            return "AI-сервис временно недоступен. Попробуйте позже."
+        except Exception:
+            error_type = "internal_error"
+            logger.exception("Unexpected Jarvis agent error")
+            return "Произошла внутренняя ошибка. Попробуйте позже."
+        finally:
+            audit_logger.info(
+                "agent_request_finished user_id=%s tool_rounds=%d "
+                "success=%s error_type=%s duration_ms=%.3f",
+                user_id,
+                rounds,
+                str(success).lower(),
+                error_type,
+                (time.monotonic() - started_at) * 1_000,
+            )
+
+    async def _create_response(self, **kwargs: Any) -> object:
+        return await self._run_sync(
+            self.provider.create_response,
+            instructions=JARVIS_SYSTEM_PROMPT,
+            **kwargs,
+        )
+
+    @staticmethod
+    def _function_calls(response: object) -> list[object]:
+        return [
+            item
+            for item in (getattr(response, "output", None) or [])
+            if _item_value(item, "type") == "function_call"
+        ]
+
+    async def _execute_call(
+        self, call: object, *, user_id: int | None
+    ) -> dict[str, str]:
+        call_id = str(_item_value(call, "call_id", ""))
+        tool_name = str(_item_value(call, "name", ""))
+        raw_arguments = _item_value(call, "arguments", "")
+        safe_metadata: dict[str, Any] = {}
+        try:
+            arguments = self.adapter.parse_and_validate(
+                tool_name, raw_arguments
+            )
+            safe_metadata = {
+                name: arguments[name]
+                for name in ("host_alias", "service_name")
+                if name in arguments
+            }
+            execution_arguments = dict(arguments)
+            if tool_name.startswith("remote_"):
+                execution_arguments["initiator_user_id"] = user_id
+            result = await self._run_sync(
+                self.tool_manager.execute,
+                tool_name,
+                **execution_arguments,
+            )
+        except ToolCallValidationError as error:
+            result = ToolResult(
+                success=False,
+                tool=tool_name or "unknown",
+                data={},
+                message="Tool call was rejected by local validation.",
+                duration_ms=0,
+                error=error.code,
+            )
+
+        audit_logger.info(
+            "agent_tool_call user_id=%s tool=%s host=%s service=%s "
+            "success=%s error_type=%s",
+            user_id,
+            _safe_log_value(tool_name or "unknown"),
+            safe_metadata.get("host_alias"),
+            safe_metadata.get("service_name"),
+            str(result.success).lower(),
+            _safe_log_value(result.error or "none"),
+        )
+        return {
+            "type": "function_call_output",
+            "call_id": call_id,
+            "output": serialize_tool_result(result),
+        }

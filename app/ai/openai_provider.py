@@ -7,15 +7,19 @@ from openai import (
     APIConnectionError,
     APIError,
     APITimeoutError,
+    AuthenticationError,
     OpenAI,
+    RateLimitError,
 )
 
 from app.ai.provider import (
     LLMConfigurationError,
+    LLMAuthenticationError,
     LLMNetworkError,
     LLMProvider,
     LLMProviderError,
     LLMTimeoutError,
+    LLMRateLimitError,
 )
 
 logger = logging.getLogger(__name__)
@@ -85,3 +89,42 @@ class OpenAIProvider(LLMProvider):
                 "OpenAI request completed in %.3f seconds",
                 time.monotonic() - started_at,
             )
+
+    def create_response(
+        self,
+        input_items: object,
+        *,
+        tools: list[dict[str, object]] | None = None,
+        tool_choice: str = "auto",
+        previous_response_id: str | None = None,
+        instructions: str | None = None,
+    ) -> object:
+        """Create a non-streaming Responses API response with optional tools."""
+        request: dict[str, object] = {
+            "model": self.model,
+            "input": input_items,
+            "stream": False,
+        }
+        if instructions:
+            request["instructions"] = instructions
+        if tools is not None:
+            request["tools"] = tools
+            request["tool_choice"] = tool_choice
+        if previous_response_id:
+            request["previous_response_id"] = previous_response_id
+        try:
+            return self._get_client().responses.create(**request)
+        except LLMConfigurationError:
+            raise
+        except APITimeoutError as error:
+            raise LLMTimeoutError("OpenAI request timed out") from error
+        except RateLimitError as error:
+            raise LLMRateLimitError("OpenAI rate limit reached") from error
+        except AuthenticationError as error:
+            raise LLMAuthenticationError(
+                "OpenAI authentication failed"
+            ) from error
+        except APIConnectionError as error:
+            raise LLMNetworkError("Could not connect to OpenAI") from error
+        except APIError as error:
+            raise LLMProviderError("OpenAI API request failed") from error

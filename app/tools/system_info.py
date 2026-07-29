@@ -27,6 +27,7 @@ class SystemInfoTool(Tool):
         return {
             "type": "object",
             "properties": {},
+            "required": [],
             "additionalProperties": False,
         }
 

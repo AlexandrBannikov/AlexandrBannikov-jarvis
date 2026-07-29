@@ -31,7 +31,8 @@ HELP_MESSAGE = (
     "/status — показать состояние системы\n"
     "/tool system_info — локальная диагностика\n"
     "/tool remote_system_info <host> — удалённая диагностика\n"
-    "/tool remote_service_status <host> <service> — статус сервиса"
+    "/tool remote_service_status <host> <service> — статус сервиса\n"
+    "/tools — показать безопасные инструменты"
 )
 PROCESS_STARTED_AT = time.monotonic()
 MAX_INPUT_LENGTH = 4_000
@@ -149,6 +150,22 @@ async def run_tool(
         await message.reply_text(chunk)
 
 
+async def tools_command(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """List only public names and descriptions of registered tools."""
+    message = update.effective_message
+    if message is None:
+        return
+    manager = context.application.bot_data["tool_manager"]
+    lines = ["Доступные read-only инструменты:"]
+    lines.extend(
+        f"- {tool.name}: {tool.description}"
+        for tool in manager.registry.list_tools()
+    )
+    await message.reply_text("\n".join(lines))
+
+
 async def handle_text(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
@@ -166,7 +183,7 @@ async def handle_text(
         )
         return
 
-    ai_client = context.application.bot_data["ai_client"]
+    agent = context.application.bot_data["agent"]
     user_id = update.effective_user.id if update.effective_user else 0
     locks = context.application.bot_data["user_locks"]
     user_lock = locks.setdefault(user_id, asyncio.Lock())
@@ -179,7 +196,7 @@ async def handle_text(
             _show_typing(context, update.effective_chat.id)
         )
         try:
-            response = await asyncio.to_thread(ai_client.ask, prompt)
+            response = await agent.ask(prompt, user_id=user_id)
         except LLMConfigurationError:
             response = "AI-сервис не настроен. Обратитесь к администратору."
         except LLMTimeoutError:

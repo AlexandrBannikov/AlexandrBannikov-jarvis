@@ -24,3 +24,7 @@ class Tool(ABC):
     @abstractmethod
     def execute(self, **kwargs: Any) -> dict[str, Any]:
         """Execute the tool and return JSON-compatible data."""
+
+    def validate_arguments(self, arguments: dict[str, Any]) -> None:
+        """Perform semantic validation before tool execution."""
+        del arguments
