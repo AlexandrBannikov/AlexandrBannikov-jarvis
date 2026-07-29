@@ -2,13 +2,15 @@
 
 Jarvis — персональный AI-ассистент для управления инфраструктурой пользователя.
 
-На текущем этапе Jarvis работает как Telegram-бот с командами `/start`,
-`/help`, `/ping` и `/status`.
+Jarvis работает как Telegram-бот с командами `/start`, `/help`, `/ping` и
+`/status`. Обычные текстовые сообщения передаются подключённому LLM через
+независимый от конкретного поставщика слой `AIClient`.
 
 ## Требования
 
 - Python 3.12+
 - Telegram Bot Token, полученный у [@BotFather](https://t.me/BotFather)
+- API-ключ OpenAI
 
 ## Установка
 
@@ -31,6 +33,30 @@ python -m app.main
 ```
 
 Логи одновременно выводятся в консоль и записываются в `logs/jarvis.log`.
+API-ключи и полные ответы модели в журнал не записываются.
+
+## Настройка LLM
+
+Пример конфигурации OpenAI:
+
+```dotenv
+LLM_PROVIDER=openai
+OPENAI_API_KEY=sk-your-key
+OPENAI_MODEL=gpt-5.5
+OPENAI_BASE_URL=
+```
+
+Переменные окружения:
+
+- `TELEGRAM_BOT_TOKEN` — обязательный токен Telegram-бота.
+- `LLM_PROVIDER` — поставщик LLM; сейчас поддерживается `openai`.
+- `OPENAI_API_KEY` — ключ OpenAI. Если он отсутствует, бот вернёт понятное
+  сообщение без аварийного завершения.
+- `OPENAI_MODEL` — используемая модель, по умолчанию `gpt-5.5`.
+- `OPENAI_BASE_URL` — необязательный совместимый endpoint.
+
+OpenAI подключён через официальный современный SDK и Responses API. Сетевой
+запрос ограничен таймаутом в 30 секунд.
 
 ## Тесты
 
