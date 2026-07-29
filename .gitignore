@@ -4,4 +4,7 @@ venv/
 .env
 logs/*
 data/*
+*.db
+*.db-wal
+*.db-shm
 .pytest_cache/

@@ -284,3 +284,27 @@ def test_redact_hides_supported_secret_forms() -> None:
     assert key not in result
     assert "Bearer hidden" not in result
     assert "/key" not in result
+
+
+def test_validate_initializes_enabled_reminders(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    paths = paths_for(tmp_path)
+    write_valid_environment(paths)
+    reminder_path = tmp_path.parent / f"{tmp_path.name}-runtime" / "reminders.db"
+    with paths.env_file.open("a", encoding="utf-8") as destination:
+        destination.write(
+            "\nREMINDERS_ENABLED=true\n"
+            f"REMINDERS_DB_PATH={reminder_path}\n"
+            "REMINDERS_DEFAULT_TIMEZONE=Asia/Yekaterinburg\n"
+        )
+    monkeypatch.setattr(rollout, "_owner_ok", lambda path: True)
+    monkeypatch.setattr(rollout, "_port_available", lambda host, port: True)
+
+    report = rollout.validate(paths, emit=False, secret_scan=lambda: [])
+
+    assert report.ready
+    assert any(
+        level == "PASS" and "Reminder SQLite" in message
+        for level, message in report.checks
+    )

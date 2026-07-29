@@ -17,6 +17,7 @@ PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
 ReadWritePaths=/opt/jarvis/logs /opt/jarvis/data
+StateDirectory=jarvis
 ReadOnlyPaths=-/etc/jarvis/hosts.yaml -/etc/jarvis/known_hosts -/etc/jarvis/keys
 UMask=0077
 

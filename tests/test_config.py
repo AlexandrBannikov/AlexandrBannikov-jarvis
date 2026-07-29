@@ -74,6 +74,47 @@ def test_load_config_uses_llm_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert config.memory_autosave is True
     assert config.memory_summarization is True
     assert config.memory_db_path == Path("data/memory.db")
+    assert config.reminders_enabled is False
+    assert config.reminders_default_timezone == "UTC"
+    assert config.reminders_db_path == Path("/var/lib/jarvis/reminders.db")
+
+
+def test_load_config_reads_reminder_settings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "test-token")
+    monkeypatch.setenv("ALLOW_PUBLIC_ACCESS", "true")
+    monkeypatch.setenv("REMINDERS_ENABLED", "true")
+    monkeypatch.setenv("REMINDERS_DEFAULT_TIMEZONE", "Asia/Yekaterinburg")
+    monkeypatch.setenv("REMINDERS_DB_PATH", "/tmp/reminders.db")
+    monkeypatch.setenv("REMINDERS_POLL_INTERVAL_SECONDS", "15")
+    monkeypatch.setenv("REMINDERS_MAX_DELIVERY_ATTEMPTS", "7")
+    config = load_config()
+    assert config.reminders_enabled
+    assert config.reminders_default_timezone == "Asia/Yekaterinburg"
+    assert config.reminders_db_path == Path("/tmp/reminders.db")
+    assert config.reminders_poll_interval_seconds == 15
+    assert config.reminders_max_delivery_attempts == 7
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        ("REMINDERS_DEFAULT_TIMEZONE", "Invalid/Zone"),
+        ("REMINDERS_POLL_INTERVAL_SECONDS", "0"),
+        ("REMINDERS_MAX_DELIVERY_ATTEMPTS", "0"),
+        ("REMINDERS_MIN_RECURRENCE_SECONDS", "59"),
+        ("REMINDERS_LEASE_SECONDS", "9"),
+    ],
+)
+def test_load_config_rejects_invalid_reminder_settings(
+    monkeypatch: pytest.MonkeyPatch, name: str, value: str
+) -> None:
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "test-token")
+    monkeypatch.setenv("ALLOW_PUBLIC_ACCESS", "true")
+    monkeypatch.setenv(name, value)
+    with pytest.raises(RuntimeError, match=name):
+        load_config()
 
 
 def test_load_config_reads_web_search_settings(

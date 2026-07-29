@@ -111,7 +111,11 @@ class JarvisAgent:
         self.memory_manager = memory_manager
 
     async def ask(
-        self, user_text: str, user_id: int | None = None
+        self,
+        user_text: str,
+        user_id: int | None = None,
+        chat_id: int | None = None,
+        source_message_id: int | None = None,
     ) -> str:
         started_at = time.monotonic()
         rounds = 0
@@ -233,7 +237,12 @@ class JarvisAgent:
                 outputs = []
                 for call in calls:
                     outputs.append(
-                        await self._execute_call(call, user_id=user_id)
+                        await self._execute_call(
+                            call,
+                            user_id=user_id,
+                            chat_id=chat_id,
+                            source_message_id=source_message_id,
+                        )
                     )
                 response = await self._create_response(
                     input_items=outputs,
@@ -432,7 +441,12 @@ class JarvisAgent:
         ]
 
     async def _execute_call(
-        self, call: object, *, user_id: int | None
+        self,
+        call: object,
+        *,
+        user_id: int | None,
+        chat_id: int | None = None,
+        source_message_id: int | None = None,
     ) -> dict[str, str]:
         call_id = str(_item_value(call, "call_id", ""))
         tool_name = str(_item_value(call, "name", ""))
@@ -450,6 +464,14 @@ class JarvisAgent:
             execution_arguments = dict(arguments)
             if tool_name.startswith("remote_"):
                 execution_arguments["initiator_user_id"] = user_id
+            if tool_name.endswith("_reminder") or tool_name == "list_reminders":
+                execution_arguments.update(
+                    {
+                        "trusted_user_id": user_id,
+                        "trusted_chat_id": chat_id,
+                        "trusted_source_message_id": source_message_id,
+                    }
+                )
             result = await self._run_sync(
                 self.tool_manager.execute,
                 tool_name,

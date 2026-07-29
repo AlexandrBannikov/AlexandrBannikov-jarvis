@@ -20,6 +20,7 @@ from app.ai.provider import (
     LLMProviderError,
     LLMTimeoutError,
 )
+from app.reminders.service import ReminderError
 
 logger = logging.getLogger(__name__)
 START_MESSAGE = "Привет.\nЯ Jarvis.\nСистема запущена."
@@ -244,6 +245,8 @@ async def handle_text(
 
     agent = context.application.bot_data["agent"]
     user_id = update.effective_user.id if update.effective_user else 0
+    chat_id = update.effective_chat.id if update.effective_chat else 0
+    reminder_service = context.application.bot_data.get("reminder_service")
     locks = context.application.bot_data["user_locks"]
     user_lock = locks.setdefault(user_id, asyncio.Lock())
     if user_lock.locked():
@@ -251,11 +254,39 @@ async def handle_text(
         return
 
     async with user_lock:
+        if reminder_service is not None:
+            try:
+                reminder_response = await asyncio.to_thread(
+                    reminder_service.parse_and_handle,
+                    prompt,
+                    user_id=user_id,
+                    chat_id=chat_id,
+                    source_message_id=getattr(message, "message_id", None),
+                )
+            except ReminderError as error:
+                logger.info(
+                    "Reminder request rejected: user_id=%s error_code=%s",
+                    user_id,
+                    error.code,
+                )
+                reminder_response = error.user_message
+            if reminder_response is not None:
+                for chunk in _split_message(reminder_response):
+                    await message.reply_text(chunk)
+                return
         typing_task = asyncio.create_task(
             _show_typing(context, update.effective_chat.id)
         )
         try:
-            response = await agent.ask(prompt, user_id=user_id)
+            if reminder_service is None:
+                response = await agent.ask(prompt, user_id=user_id)
+            else:
+                response = await agent.ask(
+                    prompt,
+                    user_id=user_id,
+                    chat_id=chat_id,
+                    source_message_id=getattr(message, "message_id", None),
+                )
         except (
             LLMConfigurationError,
             LLMTimeoutError,

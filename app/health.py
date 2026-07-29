@@ -7,14 +7,59 @@ import time
 from urllib.request import urlopen
 
 PROCESS_STARTED_AT = time.monotonic()
+_REMINDER_PROVIDER = None
+_REMINDER_STORAGE = None
+_REMINDERS_ENABLED = False
+
+
+def set_reminder_health_provider(provider, *, enabled: bool, storage=None) -> None:
+    global _REMINDER_PROVIDER, _REMINDER_STORAGE, _REMINDERS_ENABLED
+    _REMINDER_PROVIDER = provider
+    _REMINDER_STORAGE = storage
+    _REMINDERS_ENABLED = enabled
 
 
 def health_payload() -> dict[str, object]:
-    return {
+    payload = {
         "status": "ok",
         "service": "jarvis",
         "uptime_seconds": round(time.monotonic() - PROCESS_STARTED_AT, 3),
+        "reminders_enabled": _REMINDERS_ENABLED,
+        "reminder_scheduler_running": False,
+        "reminder_database_ok": not _REMINDERS_ENABLED,
+        "active_reminders_count": 0,
+        "due_reminders_count": 0,
+        "failed_reminders_count": 0,
+        "last_scheduler_tick": None,
+        "last_successful_delivery": None,
+        "last_scheduler_error_code": None,
     }
+    if _REMINDERS_ENABLED and _REMINDER_STORAGE is not None:
+        try:
+            metrics = _REMINDER_STORAGE.metrics()
+            scheduler = _REMINDER_PROVIDER() if _REMINDER_PROVIDER else None
+            payload.update(
+                {
+                    "reminder_scheduler_running": bool(
+                        scheduler and scheduler.running
+                    ),
+                    "reminder_database_ok": _REMINDER_STORAGE.validate_schema(),
+                    "active_reminders_count": metrics["active"],
+                    "due_reminders_count": metrics["due"],
+                    "failed_reminders_count": metrics["failed"],
+                    "last_scheduler_tick": getattr(scheduler, "last_tick", None),
+                    "last_successful_delivery": getattr(
+                        scheduler, "last_successful_delivery", None
+                    ),
+                    "last_scheduler_error_code": getattr(
+                        scheduler, "last_error_code", None
+                    ),
+                }
+            )
+        except Exception:
+            payload["reminder_database_ok"] = False
+            payload["last_scheduler_error_code"] = "HEALTH_DATABASE_ERROR"
+    return payload
 
 
 class _HealthHandler(BaseHTTPRequestHandler):

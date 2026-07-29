@@ -365,3 +365,21 @@ Telegram поддерживает эквивалентные allowlisted-ком�
 Имя systemd unit должно одновременно соответствовать безопасному шаблону и
 присутствовать в `allowed_services` выбранного хоста. Внутренняя SSH-команда,
 пути ключей, конфигурация и traceback пользователю не возвращаются.
+## Persistent Telegram reminders
+
+Reminders use a separate SQLite database and a background scheduler inside the
+Jarvis service. Enable them explicitly with `REMINDERS_ENABLED=true`. All
+database timestamps are UTC; user-facing times use
+`REMINDERS_DEFAULT_TIMEZONE`. Monthly recurrences skip months where the chosen
+day does not exist. The scheduler atomically claims due rows with expiring
+leases, retries temporary delivery failures with exponential backoff, and
+coalesces missed recurring runs.
+
+Read-only diagnostics:
+
+```bash
+python -m app.reminders.cli status
+python -m app.reminders.cli list --user-id 228333796
+python -m app.reminders.cli due
+python -m app.reminders.cli validate
+```

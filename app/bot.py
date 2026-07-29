@@ -23,6 +23,10 @@ from app.handlers import (
 )
 from app.memory import MemoryManager, MemoryStorage
 from app.memory.tools import register_memory_tools
+from app.reminders import ReminderScheduler, ReminderService, ReminderStorage
+from app.reminders.delivery import ReminderDelivery
+from app.reminders.tools import register_reminder_tools
+from app.health import set_reminder_health_provider
 from app.tools import create_default_tool_manager
 
 logger = logging.getLogger(__name__)
@@ -48,12 +52,26 @@ async def send_startup_notification(application: Application) -> None:
         )
 
 
+async def initialize_application(application: Application) -> None:
+    await send_startup_notification(application)
+    scheduler = application.bot_data.get("reminder_scheduler")
+    if scheduler is not None:
+        scheduler.start()
+
+
+async def shutdown_application(application: Application) -> None:
+    scheduler = application.bot_data.get("reminder_scheduler")
+    if scheduler is not None:
+        await scheduler.stop()
+
+
 def build_application(config: Config) -> Application:
     """Build the Telegram application and register command handlers."""
     application = (
         Application.builder()
         .token(config.telegram_bot_token)
-        .post_init(send_startup_notification)
+        .post_init(initialize_application)
+        .post_shutdown(shutdown_application)
         .build()
     )
     application.bot_data["config"] = config
@@ -74,6 +92,41 @@ def build_application(config: Config) -> Application:
         register_memory_tools(tool_manager.registry, memory_manager)
     application.bot_data["tool_manager"] = tool_manager
     application.bot_data["memory_manager"] = memory_manager
+    reminder_service = None
+    reminder_scheduler = None
+    if config.reminders_enabled:
+        reminder_storage = ReminderStorage(config.reminders_db_path)
+        reminder_service = ReminderService(
+            reminder_storage,
+            default_timezone=config.reminders_default_timezone,
+            min_lead_seconds=config.reminders_min_lead_seconds,
+            max_active_per_user=config.reminders_max_active_per_user,
+            max_title_length=config.reminders_max_title_length,
+            max_message_length=config.reminders_max_message_length,
+            min_recurrence_seconds=config.reminders_min_recurrence_seconds,
+            list_limit=config.reminders_list_limit,
+        )
+        register_reminder_tools(tool_manager.registry, reminder_service)
+        reminder_scheduler = ReminderScheduler(
+            reminder_storage,
+            ReminderDelivery(
+                application.bot,
+                config.telegram_allowed_user_ids,
+                enabled=config.reminders_delivery_enabled,
+            ),
+            poll_interval=config.reminders_poll_interval_seconds,
+            lease_seconds=config.reminders_lease_seconds,
+            max_attempts=config.reminders_max_delivery_attempts,
+            retry_base_seconds=config.reminders_retry_base_seconds,
+            overdue_grace_seconds=config.reminders_overdue_grace_seconds,
+        )
+    application.bot_data["reminder_service"] = reminder_service
+    application.bot_data["reminder_scheduler"] = reminder_scheduler
+    set_reminder_health_provider(
+        (lambda: reminder_scheduler) if reminder_scheduler else None,
+        enabled=config.reminders_enabled,
+        storage=reminder_service.storage if reminder_service else None,
+    )
     application.bot_data["agent"] = JarvisAgent(
         ai_client.provider,
         tool_manager,

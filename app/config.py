@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import os
 from collections.abc import Mapping
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
 SUPPORTED_LLM_PROVIDERS = frozenset({"openai"})
@@ -35,6 +36,21 @@ class Config:
     memory_autosave: bool = True
     memory_summarization: bool = True
     memory_db_path: Path = Path("data/memory.db")
+    reminders_enabled: bool = False
+    reminders_db_path: Path = Path("/var/lib/jarvis/reminders.db")
+    reminders_default_timezone: str = "UTC"
+    reminders_poll_interval_seconds: int = 10
+    reminders_min_lead_seconds: int = 20
+    reminders_max_active_per_user: int = 100
+    reminders_max_message_length: int = 1000
+    reminders_max_title_length: int = 120
+    reminders_max_delivery_attempts: int = 5
+    reminders_retry_base_seconds: int = 30
+    reminders_overdue_grace_seconds: int = 86400
+    reminders_min_recurrence_seconds: int = 3600
+    reminders_delivery_enabled: bool = True
+    reminders_lease_seconds: int = 120
+    reminders_list_limit: int = 20
 
 
 def _parse_boolean(value: str, name: str) -> bool:
@@ -134,6 +150,13 @@ def load_config(environment: Mapping[str, str] | None = None) -> Config:
         raise RuntimeError(
             "JARVIS_WEB_SEARCH_CONTEXT_SIZE must be low, medium or high"
         )
+    reminders_timezone = values.get(
+        "REMINDERS_DEFAULT_TIMEZONE", "UTC"
+    ).strip() or "UTC"
+    try:
+        ZoneInfo(reminders_timezone)
+    except ZoneInfoNotFoundError as error:
+        raise RuntimeError("REMINDERS_DEFAULT_TIMEZONE is invalid") from error
     return Config(
         telegram_bot_token=token,
         llm_provider=provider,
@@ -190,5 +213,63 @@ def load_config(environment: Mapping[str, str] | None = None) -> Config:
         memory_db_path=Path(
             values.get("MEMORY_DB_PATH", "data/memory.db").strip()
             or "data/memory.db"
+        ),
+        reminders_enabled=_parse_boolean(
+            values.get("REMINDERS_ENABLED", "false"), "REMINDERS_ENABLED"
+        ),
+        reminders_db_path=Path(
+            values.get(
+                "REMINDERS_DB_PATH", "/var/lib/jarvis/reminders.db"
+            ).strip()
+            or "/var/lib/jarvis/reminders.db"
+        ),
+        reminders_default_timezone=reminders_timezone,
+        reminders_poll_interval_seconds=_parse_bounded_int(
+            values.get("REMINDERS_POLL_INTERVAL_SECONDS", "10"),
+            "REMINDERS_POLL_INTERVAL_SECONDS", 1, 3600,
+        ),
+        reminders_min_lead_seconds=_parse_bounded_int(
+            values.get("REMINDERS_MIN_LEAD_SECONDS", "20"),
+            "REMINDERS_MIN_LEAD_SECONDS", 1, 86400,
+        ),
+        reminders_max_active_per_user=_parse_bounded_int(
+            values.get("REMINDERS_MAX_ACTIVE_PER_USER", "100"),
+            "REMINDERS_MAX_ACTIVE_PER_USER", 1, 1000,
+        ),
+        reminders_max_message_length=_parse_bounded_int(
+            values.get("REMINDERS_MAX_MESSAGE_LENGTH", "1000"),
+            "REMINDERS_MAX_MESSAGE_LENGTH", 1, 4000,
+        ),
+        reminders_max_title_length=_parse_bounded_int(
+            values.get("REMINDERS_MAX_TITLE_LENGTH", "120"),
+            "REMINDERS_MAX_TITLE_LENGTH", 1, 500,
+        ),
+        reminders_max_delivery_attempts=_parse_bounded_int(
+            values.get("REMINDERS_MAX_DELIVERY_ATTEMPTS", "5"),
+            "REMINDERS_MAX_DELIVERY_ATTEMPTS", 1, 20,
+        ),
+        reminders_retry_base_seconds=_parse_bounded_int(
+            values.get("REMINDERS_RETRY_BASE_SECONDS", "30"),
+            "REMINDERS_RETRY_BASE_SECONDS", 1, 3600,
+        ),
+        reminders_overdue_grace_seconds=_parse_bounded_int(
+            values.get("REMINDERS_OVERDUE_GRACE_SECONDS", "86400"),
+            "REMINDERS_OVERDUE_GRACE_SECONDS", 60, 2_592_000,
+        ),
+        reminders_min_recurrence_seconds=_parse_bounded_int(
+            values.get("REMINDERS_MIN_RECURRENCE_SECONDS", "3600"),
+            "REMINDERS_MIN_RECURRENCE_SECONDS", 60, 604800,
+        ),
+        reminders_delivery_enabled=_parse_boolean(
+            values.get("REMINDERS_DELIVERY_ENABLED", "true"),
+            "REMINDERS_DELIVERY_ENABLED",
+        ),
+        reminders_lease_seconds=_parse_bounded_int(
+            values.get("REMINDERS_LEASE_SECONDS", "120"),
+            "REMINDERS_LEASE_SECONDS", 10, 3600,
+        ),
+        reminders_list_limit=_parse_bounded_int(
+            values.get("REMINDERS_LIST_LIMIT", "20"),
+            "REMINDERS_LIST_LIMIT", 1, 100,
         ),
     )

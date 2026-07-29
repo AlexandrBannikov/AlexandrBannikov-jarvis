@@ -28,6 +28,7 @@ from app.config import Config, load_config  # noqa: E402
 from app.health import probe_health  # noqa: E402
 from app.infrastructure.hosts import load_hosts_config  # noqa: E402
 from app.memory import MemoryStorage  # noqa: E402
+from app.reminders import ReminderStorage  # noqa: E402
 from app.startup import startup_self_check  # noqa: E402
 from app.tools import create_default_tool_manager  # noqa: E402
 from scripts.check_secrets import scan_repository  # noqa: E402
@@ -49,6 +50,21 @@ MEMORY_MAX_RESULTS=7
 MEMORY_AUTOSAVE=true
 MEMORY_SUMMARIZATION=true
 MEMORY_DB_PATH=/opt/jarvis/data/memory.db
+REMINDERS_ENABLED=false
+REMINDERS_DB_PATH=/var/lib/jarvis/reminders.db
+REMINDERS_DEFAULT_TIMEZONE=Asia/Yekaterinburg
+REMINDERS_POLL_INTERVAL_SECONDS=10
+REMINDERS_MIN_LEAD_SECONDS=20
+REMINDERS_MAX_ACTIVE_PER_USER=100
+REMINDERS_MAX_MESSAGE_LENGTH=1000
+REMINDERS_MAX_TITLE_LENGTH=120
+REMINDERS_MAX_DELIVERY_ATTEMPTS=5
+REMINDERS_RETRY_BASE_SECONDS=30
+REMINDERS_OVERDUE_GRACE_SECONDS=86400
+REMINDERS_MIN_RECURRENCE_SECONDS=3600
+REMINDERS_DELIVERY_ENABLED=true
+REMINDERS_LEASE_SECONDS=120
+REMINDERS_LIST_LIMIT=20
 
 JARVIS_SSH_MODE=mock
 JARVIS_HOSTS_CONFIG=/etc/jarvis/hosts.yaml
@@ -343,6 +359,34 @@ def validate(
             report.fail("Project memory SQLite database writable")
     else:
         report.warn("Project memory disabled")
+    if config is not None and config.reminders_enabled:
+        try:
+            database_path = config.reminders_db_path.resolve()
+            project_path = paths.project_root.resolve()
+            if database_path == project_path or project_path in database_path.parents:
+                report.fail("Reminder database outside Git repository")
+            else:
+                report.pass_("Reminder database outside Git repository")
+            database_path.parent.mkdir(parents=True, exist_ok=True)
+            storage = ReminderStorage(database_path)
+            storage.initialize()
+            if storage.validate_schema():
+                report.pass_("Reminder SQLite schema and migrations")
+            else:
+                report.fail("Reminder SQLite schema and migrations")
+            if config.reminders_delivery_enabled and values.get(
+                "TELEGRAM_BOT_TOKEN", ""
+            ).strip():
+                report.pass_("Reminder delivery Telegram configuration")
+            elif config.reminders_delivery_enabled:
+                report.fail("Reminder delivery Telegram configuration")
+            else:
+                report.warn("Reminder delivery disabled")
+            report.pass_("Reminder scheduler and retry configuration")
+        except Exception:
+            report.fail("Reminder database directory and schema")
+    else:
+        report.warn("Reminders disabled")
     if not paths.hosts_file.is_file():
         report.fail("hosts.yaml exists")
         hosts = None
