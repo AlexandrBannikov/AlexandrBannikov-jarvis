@@ -64,6 +64,8 @@ OPENAI_API_KEY=
 OPENAI_MODEL=gpt-5.5
 OPENAI_BASE_URL=
 MAX_TOOL_ROUNDS=4
+JARVIS_WEB_SEARCH_ENABLED=false
+JARVIS_WEB_SEARCH_CONTEXT_SIZE=medium
 LOG_LEVEL=INFO
 TELEGRAM_ALLOWED_USER_IDS=123456789
 ALLOW_PUBLIC_ACCESS=false
@@ -84,6 +86,10 @@ TELEGRAM_STARTUP_NOTIFICATION=false
 - `OPENAI_BASE_URL` — необязательный совместимый endpoint.
 - `MAX_TOOL_ROUNDS` — максимальное число последовательных раундов вызова
   инструментов, по умолчанию `4` (допустимо 1–10).
+- `JARVIS_WEB_SEARCH_ENABLED` — явно включает встроенный OpenAI web search;
+  по умолчанию `false`, отдельный поисковый API-ключ не нужен.
+- `JARVIS_WEB_SEARCH_CONTEXT_SIZE` — объём поискового контекста: `low`,
+  `medium` или `high`; по умолчанию `medium`.
 - `LOG_LEVEL` — уровень журналирования: `DEBUG`, `INFO`, `WARNING`, `ERROR`
   или `CRITICAL`.
 - `TELEGRAM_ALLOWED_USER_IDS` — разделённый запятыми список разрешённых
@@ -128,6 +134,14 @@ OpenAI подключён через официальный современны
 - `system_info` — сведения о локальном хосте и процессе Jarvis;
 - `remote_system_info` — read-only сведения о настроенном удалённом хосте;
 - `remote_service_status` — read-only свойства разрешённого systemd unit.
+
+При `JARVIS_WEB_SEARCH_ENABLED=true` в тот же Responses API запрос добавляется
+встроенный hosted tool `web_search`. Модель выбирает его с
+`tool_choice="auto"` только для актуальной внешней информации или по явной
+просьбе пользователя. Для обычной беседы и локальной диагностики поиск не
+используется. Ответы поиска содержат видимые названия и HTTP(S)-ссылки
+источников. Запросы с признаками ключей, Bearer-токенов, паролей или приватных
+ключей не получают доступ к web search.
 
 Параметров `command`, `shell` или произвольного запроса в схемах нет. Модель
 не может изменять состояние серверов. Если подходящего инструмента нет, она

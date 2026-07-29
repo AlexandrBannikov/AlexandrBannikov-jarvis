@@ -10,6 +10,11 @@ import pytest
 from app.ai.agent import (
     EMPTY_RESPONSE_MESSAGE,
     TOOL_ROUND_LIMIT_MESSAGE,
+    WEB_SEARCH_DISABLED_MESSAGE,
+    WEB_SEARCH_EMPTY_MESSAGE,
+    WEB_SEARCH_SECRET_MESSAGE,
+    WEB_SEARCH_UNAVAILABLE_MESSAGE,
+    WEB_SEARCH_UNSUPPORTED_MESSAGE,
     JarvisAgent,
 )
 from app.ai.provider import (
@@ -20,6 +25,8 @@ from app.ai.provider import (
     LLMPermissionError,
     LLMRateLimitError,
     LLMTimeoutError,
+    LLMWebSearchUnavailableError,
+    LLMWebSearchUnsupportedError,
 )
 from app.tools.manager import ToolManager
 from app.tools.registry import ToolRegistry
@@ -50,6 +57,40 @@ def call(call_id: str, name: str = "system_info", arguments: str = "{}"):
         call_id=call_id,
         name=name,
         arguments=arguments,
+    )
+
+
+def web_response(
+    response_id: str,
+    text: str,
+    sources: list[tuple[str, str]],
+    *,
+    malformed: bool = False,
+) -> object:
+    annotations = [
+        {
+            "type": "url_citation",
+            "url": "not-a-url" if malformed else url,
+            "title": title,
+        }
+        for title, url in sources
+    ]
+    return SimpleNamespace(
+        id=response_id,
+        output_text=text,
+        output=[
+            {"type": "web_search_call", "status": "completed"},
+            {
+                "type": "message",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": text,
+                        "annotations": annotations,
+                    }
+                ],
+            },
+        ],
     )
 
 
@@ -88,6 +129,227 @@ def test_plain_text_response_needs_no_tool() -> None:
     assert len(provider.requests) == 1
     assert provider.requests[0]["tool_choice"] == "auto"
     assert provider.requests[0]["tools"]
+
+
+def test_web_search_is_offered_but_not_required_for_ordinary_question() -> None:
+    provider = FakeProvider([response("r1", text="systemd — менеджер служб.")])
+
+    answer = asyncio.run(
+        JarvisAgent(
+            provider,
+            manager(),
+            run_sync=run_immediately,
+            web_search_enabled=True,
+        ).ask("Что такое systemd?")
+    )
+
+    assert answer == "systemd — менеджер служб."
+    assert any(
+        tool["type"] == "web_search"
+        for tool in provider.requests[0]["tools"]
+    )
+    assert not any(
+        item.get("type") == "web_search_call"
+        for item in getattr(provider.responses, "output", [])
+    )
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "Какая сейчас последняя стабильная версия Python?",
+        "Найди в интернете последние новости OpenAI.",
+    ],
+)
+def test_current_or_explicit_question_can_use_web_search(
+    question: str,
+) -> None:
+    provider = FakeProvider(
+        [
+            web_response(
+                "r1",
+                "Актуальный ответ.",
+                [("Python", "https://www.python.org/downloads/")],
+            )
+        ]
+    )
+
+    answer = asyncio.run(
+        JarvisAgent(
+            provider,
+            manager(),
+            run_sync=run_immediately,
+            web_search_enabled=True,
+        ).ask(question)
+    )
+
+    assert "Актуальный ответ." in answer
+    assert "Источники:" in answer
+    assert "https://www.python.org/downloads/" in answer
+
+
+def test_web_search_formats_multiple_unique_sources() -> None:
+    response_with_sources = web_response(
+        "r1",
+        "Свежая информация.",
+        [
+            ("Источник A", "https://example.com/a"),
+            ("Источник B", "https://example.org/b"),
+            ("Дубликат", "https://example.com/a"),
+        ],
+    )
+
+    answer = asyncio.run(
+        JarvisAgent(
+            FakeProvider([response_with_sources]),
+            manager(),
+            run_sync=run_immediately,
+            web_search_enabled=True,
+        ).ask("Что нового?")
+    )
+
+    assert answer.count("https://example.com/a") == 1
+    assert "2. Источник B — https://example.org/b" in answer
+
+
+def test_web_search_logs_only_safe_metrics(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    private_query = "private-search-phrase"
+    source_url = "https://example.com/result?private=value"
+    provider = FakeProvider(
+        [web_response("r1", "Актуально.", [("Source", source_url)])]
+    )
+
+    with caplog.at_level("INFO", logger="jarvis.audit"):
+        asyncio.run(
+            JarvisAgent(
+                provider,
+                manager(),
+                run_sync=run_immediately,
+                web_search_enabled=True,
+            ).ask(private_query)
+        )
+
+    assert "web_search_used=true" in caplog.text
+    assert "number_of_sources=1" in caplog.text
+    assert private_query not in caplog.text
+    assert source_url not in caplog.text
+    assert "private=value" not in caplog.text
+
+
+def test_explicit_web_search_reports_disabled_without_provider_call() -> None:
+    provider = FakeProvider([])
+
+    answer = asyncio.run(
+        JarvisAgent(provider, manager(), run_sync=run_immediately).ask(
+            "Найди в интернете свежие новости"
+        )
+    )
+
+    assert answer == WEB_SEARCH_DISABLED_MESSAGE
+    assert provider.requests == []
+
+
+@pytest.mark.parametrize(
+    "secret_request",
+    [
+        "Найди в интернете ключ " + "sk-" + "TEST_SECRET_VALUE",
+        "Поищи Authorization: " + "Bear" + "er private-value",
+        "Найди в интернете OPENAI_API_KEY=private-value",
+    ],
+)
+def test_secret_request_is_never_given_web_search(
+    secret_request: str,
+) -> None:
+    provider = FakeProvider([])
+
+    answer = asyncio.run(
+        JarvisAgent(
+            provider,
+            manager(),
+            run_sync=run_immediately,
+            web_search_enabled=True,
+        ).ask(secret_request)
+    )
+
+    assert answer == WEB_SEARCH_SECRET_MESSAGE
+    assert provider.requests == []
+
+
+@pytest.mark.parametrize("malformed", [False, True])
+def test_web_search_rejects_missing_or_malformed_citations(
+    malformed: bool,
+) -> None:
+    sources = [("Broken", "https://example.com")] if malformed else []
+    provider = FakeProvider(
+        [web_response("r1", "Uncited current claim", sources, malformed=malformed)]
+    )
+
+    answer = asyncio.run(
+        JarvisAgent(
+            provider,
+            manager(),
+            run_sync=run_immediately,
+            web_search_enabled=True,
+        ).ask("Что нового?")
+    )
+
+    assert answer == WEB_SEARCH_EMPTY_MESSAGE
+
+
+def test_explicit_search_failure_has_specific_message() -> None:
+    provider = FakeProvider([LLMWebSearchUnavailableError()])
+
+    answer = asyncio.run(
+        JarvisAgent(
+            provider,
+            manager(),
+            run_sync=run_immediately,
+            web_search_enabled=True,
+        ).ask("Найди в интернете новости")
+    )
+
+    assert answer == WEB_SEARCH_UNAVAILABLE_MESSAGE
+
+
+def test_unsupported_search_model_has_specific_message() -> None:
+    provider = FakeProvider([LLMWebSearchUnsupportedError()])
+
+    answer = asyncio.run(
+        JarvisAgent(
+            provider,
+            manager(),
+            run_sync=run_immediately,
+            web_search_enabled=True,
+        ).ask("Что нового?")
+    )
+
+    assert answer == WEB_SEARCH_UNSUPPORTED_MESSAGE
+
+
+def test_search_failure_can_fall_back_for_stable_question() -> None:
+    provider = FakeProvider(
+        [
+            LLMWebSearchUnavailableError(),
+            response("r2", text="Стабильный ответ без поиска."),
+        ]
+    )
+
+    answer = asyncio.run(
+        JarvisAgent(
+            provider,
+            manager(),
+            run_sync=run_immediately,
+            web_search_enabled=True,
+        ).ask("Объясни арифметику")
+    )
+
+    assert answer == "Стабильный ответ без поиска."
+    assert all(
+        tool["type"] != "web_search"
+        for tool in provider.requests[1]["tools"]
+    )
 
 
 def test_one_tool_call_uses_matching_call_id_and_previous_response() -> None:

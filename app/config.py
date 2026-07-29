@@ -8,6 +8,7 @@ from pathlib import Path
 
 SUPPORTED_LLM_PROVIDERS = frozenset({"openai"})
 VALID_LOG_LEVELS = frozenset({"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"})
+VALID_WEB_SEARCH_CONTEXT_SIZES = frozenset({"low", "medium", "high"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,6 +27,8 @@ class Config:
     health_host: str = "127.0.0.1"
     health_port: int = 8090
     telegram_startup_notification: bool = False
+    web_search_enabled: bool = False
+    web_search_context_size: str = "medium"
 
 
 def _parse_boolean(value: str, name: str) -> bool:
@@ -106,6 +109,13 @@ def load_config(environment: Mapping[str, str] | None = None) -> Config:
     ssh_mode = values.get("JARVIS_SSH_MODE", "mock").strip().lower()
     if ssh_mode not in {"mock", "real"}:
         raise RuntimeError("JARVIS_SSH_MODE must be mock or real")
+    web_search_context_size = values.get(
+        "JARVIS_WEB_SEARCH_CONTEXT_SIZE", "medium"
+    ).strip().lower()
+    if web_search_context_size not in VALID_WEB_SEARCH_CONTEXT_SIZES:
+        raise RuntimeError(
+            "JARVIS_WEB_SEARCH_CONTEXT_SIZE must be low, medium or high"
+        )
     return Config(
         telegram_bot_token=token,
         llm_provider=provider,
@@ -132,4 +142,9 @@ def load_config(environment: Mapping[str, str] | None = None) -> Config:
             values.get("TELEGRAM_STARTUP_NOTIFICATION", "false"),
             "TELEGRAM_STARTUP_NOTIFICATION",
         ),
+        web_search_enabled=_parse_boolean(
+            values.get("JARVIS_WEB_SEARCH_ENABLED", "false"),
+            "JARVIS_WEB_SEARCH_ENABLED",
+        ),
+        web_search_context_size=web_search_context_size,
     )

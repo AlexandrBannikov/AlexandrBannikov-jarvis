@@ -1,5 +1,5 @@
 python-telegram-bot
-openai
+openai>=2.50.0,<3
 python-dotenv
 pytest
 paramiko

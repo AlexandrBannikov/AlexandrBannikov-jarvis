@@ -65,6 +65,8 @@ def build_application(config: Config) -> Application:
         ai_client.provider,
         tool_manager,
         max_tool_rounds=config.max_tool_rounds,
+        web_search_enabled=config.web_search_enabled,
+        web_search_context_size=config.web_search_context_size,
     )
     application.bot_data["user_locks"] = {}
     application.add_handler(

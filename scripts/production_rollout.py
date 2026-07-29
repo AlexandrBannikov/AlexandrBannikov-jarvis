@@ -40,6 +40,8 @@ OPENAI_API_KEY=
 OPENAI_MODEL=
 OPENAI_BASE_URL=
 MAX_TOOL_ROUNDS=4
+JARVIS_WEB_SEARCH_ENABLED=false
+JARVIS_WEB_SEARCH_CONTEXT_SIZE=medium
 
 JARVIS_SSH_MODE=mock
 JARVIS_HOSTS_CONFIG=/etc/jarvis/hosts.yaml
@@ -318,6 +320,10 @@ def validate(
         report.pass_("LLM provider is openai")
     else:
         report.fail("LLM provider is unsupported")
+    if config is not None and config.web_search_enabled:
+        report.pass_("OpenAI web search explicitly enabled")
+    else:
+        report.warn("OpenAI web search disabled")
     if not paths.hosts_file.is_file():
         report.fail("hosts.yaml exists")
         hosts = None

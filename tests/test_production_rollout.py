@@ -48,6 +48,8 @@ def write_valid_environment(paths: rollout.RolloutPaths) -> None:
                 f"{key_name}=openai-test-value",
                 "OPENAI_MODEL=test-model",
                 "MAX_TOOL_ROUNDS=4",
+                "JARVIS_WEB_SEARCH_ENABLED=true",
+                "JARVIS_WEB_SEARCH_CONTEXT_SIZE=medium",
                 "JARVIS_SSH_MODE=mock",
                 f"JARVIS_HOSTS_CONFIG={paths.hosts_file}",
                 "LOG_LEVEL=INFO",
@@ -101,6 +103,10 @@ def test_validate_ready_in_mock_mode(
 
     assert report.ready
     assert ("WARN", "JARVIS_SSH_MODE=mock") in report.checks
+    assert (
+        "PASS",
+        "OpenAI web search explicitly enabled",
+    ) in report.checks
 
 
 def test_validate_not_ready_with_empty_allowlist(

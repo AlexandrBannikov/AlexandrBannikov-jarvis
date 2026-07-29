@@ -39,6 +39,14 @@ class LLMModelUnavailableError(LLMError):
     """The requested model is unavailable to this account."""
 
 
+class LLMWebSearchUnavailableError(LLMError):
+    """The hosted web search tool is temporarily unavailable."""
+
+
+class LLMWebSearchUnsupportedError(LLMError):
+    """The selected model does not support hosted web search."""
+
+
 class LLMProviderError(LLMError):
     """The provider rejected or failed the request."""
 

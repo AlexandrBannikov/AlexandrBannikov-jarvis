@@ -27,6 +27,8 @@ from app.ai.provider import (
     LLMProviderError,
     LLMTimeoutError,
     LLMRateLimitError,
+    LLMWebSearchUnavailableError,
+    LLMWebSearchUnsupportedError,
 )
 
 logger = logging.getLogger(__name__)
@@ -142,6 +144,11 @@ class OpenAIProvider(LLMProvider):
         """Call Responses API with safe telemetry and a model fallback."""
         started_at = time.monotonic()
         model = self.model
+        tools = request.get("tools")
+        web_search_enabled = isinstance(tools, list) and any(
+            isinstance(tool, dict) and tool.get("type") == "web_search"
+            for tool in tools
+        )
         try:
             try:
                 response = self._get_client().responses.create(
@@ -197,7 +204,25 @@ class OpenAIProvider(LLMProvider):
                 _exception_chain(error),
                 (time.monotonic() - started_at) * 1_000,
             )
-            if isinstance(error, AuthenticationError):
+            if web_search_enabled and isinstance(
+                error, (PermissionDeniedError, NotFoundError, BadRequestError)
+            ):
+                translated = LLMWebSearchUnsupportedError(
+                    "Hosted web search is unsupported"
+                )
+            elif web_search_enabled and isinstance(
+                error,
+                (
+                    RateLimitError,
+                    APITimeoutError,
+                    APIConnectionError,
+                    InternalServerError,
+                ),
+            ):
+                translated = LLMWebSearchUnavailableError(
+                    "Hosted web search is unavailable"
+                )
+            elif isinstance(error, AuthenticationError):
                 translated = LLMAuthenticationError(
                     "OpenAI authentication failed"
                 )

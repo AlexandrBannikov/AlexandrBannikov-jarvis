@@ -32,6 +32,8 @@ from app.ai.provider import (
     LLMProviderError,
     LLMTimeoutError,
     LLMRateLimitError,
+    LLMWebSearchUnavailableError,
+    LLMWebSearchUnsupportedError,
 )
 
 
@@ -239,6 +241,54 @@ def test_request_log_contains_metadata_but_not_content(
     assert "request_id=request-safe" in caplog.text
     assert "private prompt" not in caplog.text
     assert "private response" not in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("sdk_error", "expected_error"),
+    [
+        (
+            BadRequestError(
+                "tool unsupported", response=sdk_response(400), body=None
+            ),
+            LLMWebSearchUnsupportedError,
+        ),
+        (
+            PermissionDeniedError(
+                "tool denied", response=sdk_response(403), body=None
+            ),
+            LLMWebSearchUnsupportedError,
+        ),
+        (
+            APITimeoutError(request=Mock()),
+            LLMWebSearchUnavailableError,
+        ),
+        (
+            RateLimitError(
+                "limited", response=sdk_response(429), body=None
+            ),
+            LLMWebSearchUnavailableError,
+        ),
+        (
+            APIConnectionError(request=Mock()),
+            LLMWebSearchUnavailableError,
+        ),
+    ],
+)
+def test_web_search_errors_are_distinct(
+    sdk_error: Exception, expected_error: type[Exception]
+) -> None:
+    provider = OpenAIProvider(
+        api_key="key", model=DEFAULT_OPENAI_MODEL
+    )
+    provider._client = Mock()
+    provider._client.responses.create.side_effect = sdk_error
+
+    with pytest.raises(expected_error):
+        provider.create_response(
+            [],
+            tools=[{"type": "web_search"}],
+            tool_choice="auto",
+        )
 
 
 @pytest.mark.parametrize(

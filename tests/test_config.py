@@ -66,6 +66,33 @@ def test_load_config_uses_llm_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert config.openai_api_key == ""
     assert config.openai_model == "gpt-5.5"
     assert config.openai_base_url is None
+    assert config.web_search_enabled is False
+    assert config.web_search_context_size == "medium"
+
+
+def test_load_config_reads_web_search_settings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "test-token")
+    monkeypatch.setenv("ALLOW_PUBLIC_ACCESS", "true")
+    monkeypatch.setenv("JARVIS_WEB_SEARCH_ENABLED", "true")
+    monkeypatch.setenv("JARVIS_WEB_SEARCH_CONTEXT_SIZE", "high")
+
+    config = load_config()
+
+    assert config.web_search_enabled is True
+    assert config.web_search_context_size == "high"
+
+
+def test_load_config_rejects_invalid_web_search_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "test-token")
+    monkeypatch.setenv("ALLOW_PUBLIC_ACCESS", "true")
+    monkeypatch.setenv("JARVIS_WEB_SEARCH_CONTEXT_SIZE", "huge")
+
+    with pytest.raises(RuntimeError, match="JARVIS_WEB_SEARCH_CONTEXT_SIZE"):
+        load_config()
 
 
 def test_load_config_requires_explicit_access_policy(
