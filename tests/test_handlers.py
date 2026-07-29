@@ -19,16 +19,22 @@ from app.handlers import (
     TELEGRAM_MESSAGE_LIMIT,
     authorize,
     handle_text,
+    handle_unknown,
     help_command,
+    log_incoming_update,
     ping,
     start,
     status,
+    telegram_error_handler,
 )
 
 
 def make_update() -> SimpleNamespace:
     return SimpleNamespace(
-        effective_message=SimpleNamespace(reply_text=AsyncMock()),
+        update_id=789,
+        effective_message=SimpleNamespace(
+            reply_text=AsyncMock(), text=None
+        ),
         effective_user=SimpleNamespace(id=123),
         effective_chat=SimpleNamespace(id=456),
     )
@@ -48,6 +54,7 @@ def make_context(ai_client: Mock | None = None) -> SimpleNamespace:
             }
         ),
         bot=SimpleNamespace(send_chat_action=AsyncMock()),
+        error=None,
     )
 
 
@@ -105,32 +112,17 @@ def test_text_handler_sends_ai_response() -> None:
 
 
 @pytest.mark.parametrize(
-    ("error", "expected_reply"),
+    "error",
     [
-        (
-            LLMConfigurationError(),
-            "AI-сервис не настроен. Обратитесь к администратору.",
-        ),
-        (
-            LLMTimeoutError(),
-            "AI-сервис не ответил вовремя. Попробуйте ещё раз.",
-        ),
-        (
-            LLMNetworkError(),
-            "Не удалось подключиться к AI-сервису. Попробуйте позже.",
-        ),
-        (
-            LLMProviderError(),
-            "AI-сервис временно недоступен. Попробуйте позже.",
-        ),
-        (
-            RuntimeError(),
-            "Произошла внутренняя ошибка. Попробуйте позже.",
-        ),
+        LLMConfigurationError(),
+        LLMTimeoutError(),
+        LLMNetworkError(),
+        LLMProviderError(),
+        RuntimeError(),
     ],
 )
 def test_text_handler_hides_errors(
-    error: Exception, expected_reply: str
+    error: Exception,
 ) -> None:
     update = make_update()
     update.effective_message.text = "Hello"
@@ -139,7 +131,20 @@ def test_text_handler_hides_errors(
 
     asyncio.run(handle_text(update, context))
 
-    update.effective_message.reply_text.assert_awaited_once_with(expected_reply)
+    update.effective_message.reply_text.assert_awaited_once_with(
+        "Не удалось получить ответ от модели. Ошибка записана в журнал."
+    )
+
+
+def test_logs_safe_incoming_update_metadata(caplog: pytest.LogCaptureFixture) -> None:
+    update = make_update()
+    update.effective_message.text = "private message contents"
+
+    with caplog.at_level("INFO", logger="app.handlers"):
+        asyncio.run(log_incoming_update(update, None))
+
+    assert "update_id=789 user_id=123 chat_id=456 message_type=text" in caplog.text
+    assert "private message contents" not in caplog.text
 
 
 def test_authorize_allows_allowlisted_user() -> None:
@@ -171,6 +176,32 @@ def test_authorize_denies_unknown_user() -> None:
     update.effective_message.reply_text.assert_awaited_once_with(
         "Доступ запрещён."
     )
+
+
+def test_unknown_message_type_gets_clear_reply() -> None:
+    update = make_update()
+    update.effective_message.photo = [object()]
+
+    asyncio.run(handle_unknown(update, None))
+
+    update.effective_message.reply_text.assert_awaited_once_with(
+        "Этот тип сообщения пока не поддерживается. Отправьте текст."
+    )
+
+
+def test_telegram_send_failure_is_logged(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    update = make_update()
+    context = make_context()
+    context.error = RuntimeError("Telegram send failed")
+
+    with caplog.at_level("ERROR", logger="app.handlers"):
+        asyncio.run(telegram_error_handler(update, context))
+
+    assert "update_id=789" in caplog.text
+    assert "error_type=RuntimeError" in caplog.text
+    assert "Telegram send failed" not in caplog.text
 
 
 def test_authorize_allows_explicit_public_access() -> None:

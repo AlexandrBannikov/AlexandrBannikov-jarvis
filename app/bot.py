@@ -10,12 +10,15 @@ from app.config import Config
 from app.handlers import (
     authorize,
     handle_text,
+    handle_unknown,
     health_command,
     help_command,
+    log_incoming_update,
     ping,
     run_tool,
     start,
     status,
+    telegram_error_handler,
     tools_command,
 )
 from app.tools import create_default_tool_manager
@@ -64,6 +67,9 @@ def build_application(config: Config) -> Application:
         max_tool_rounds=config.max_tool_rounds,
     )
     application.bot_data["user_locks"] = {}
+    application.add_handler(
+        MessageHandler(filters.ALL, log_incoming_update), group=-2
+    )
     application.add_handler(MessageHandler(filters.ALL, authorize), group=-1)
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
@@ -75,4 +81,6 @@ def build_application(config: Config) -> Application:
     application.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text)
     )
+    application.add_handler(MessageHandler(filters.ALL, handle_unknown))
+    application.add_error_handler(telegram_error_handler)
     return application

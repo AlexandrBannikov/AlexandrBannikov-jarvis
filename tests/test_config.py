@@ -28,6 +28,18 @@ def test_load_config_reads_token_from_environment(monkeypatch: pytest.MonkeyPatc
     assert config.max_tool_rounds == 4
 
 
+def test_load_config_parses_production_user_id_as_int(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "test-token")
+    monkeypatch.setenv("TELEGRAM_ALLOWED_USER_IDS", "228333796")
+
+    user_ids = load_config().telegram_allowed_user_ids
+
+    assert user_ids == frozenset({228333796})
+    assert all(isinstance(user_id, int) for user_id in user_ids)
+
+
 def test_load_config_strips_whitespace(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "  test-token  ")
     monkeypatch.setenv("ALLOW_PUBLIC_ACCESS", "true")

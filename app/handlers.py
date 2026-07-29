@@ -40,6 +40,45 @@ MAX_INPUT_LENGTH = 4_000
 TELEGRAM_MESSAGE_LIMIT = 4_096
 
 
+def _message_type(update: Update) -> str:
+    """Return a safe message classification without inspecting its contents."""
+    message = update.effective_message
+    if message is None:
+        return "no_message"
+    if getattr(message, "text", None) is not None:
+        return "command" if message.text.startswith("/") else "text"
+    for kind in (
+        "photo",
+        "video",
+        "audio",
+        "voice",
+        "document",
+        "sticker",
+        "location",
+        "contact",
+    ):
+        if getattr(message, kind, None):
+            return kind
+    return "other"
+
+
+async def log_incoming_update(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """Log only routing metadata for an incoming Telegram update."""
+    del context
+    user = update.effective_user
+    chat = update.effective_chat
+    logger.info(
+        "Telegram update received: update_id=%s user_id=%s chat_id=%s "
+        "message_type=%s",
+        update.update_id,
+        user.id if user else None,
+        chat.id if chat else None,
+        _message_type(update),
+    )
+
+
 async def authorize(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
@@ -50,7 +89,17 @@ async def authorize(
         user is not None and user.id in config.telegram_allowed_user_ids
     )
     if is_allowed:
+        logger.info(
+            "Telegram update authorized: update_id=%s user_id=%s",
+            update.update_id,
+            user.id if user else None,
+        )
         return
+    logger.warning(
+        "Telegram update blocked by allowlist: update_id=%s user_id=%s",
+        update.update_id,
+        user.id if user else None,
+    )
     if update.effective_message:
         await update.effective_message.reply_text("Доступ запрещён.")
     raise ApplicationHandlerStop
@@ -207,17 +256,28 @@ async def handle_text(
         )
         try:
             response = await agent.ask(prompt, user_id=user_id)
-        except LLMConfigurationError:
-            response = "AI-сервис не настроен. Обратитесь к администратору."
-        except LLMTimeoutError:
-            response = "AI-сервис не ответил вовремя. Попробуйте ещё раз."
-        except LLMNetworkError:
-            response = "Не удалось подключиться к AI-сервису. Попробуйте позже."
-        except LLMProviderError:
-            response = "AI-сервис временно недоступен. Попробуйте позже."
-        except Exception:
-            logger.exception("Unexpected error while handling an AI request")
-            response = "Произошла внутренняя ошибка. Попробуйте позже."
+        except (
+            LLMConfigurationError,
+            LLMTimeoutError,
+            LLMNetworkError,
+            LLMProviderError,
+        ) as error:
+            logger.error(
+                "LLM request failed: error_type=%s", type(error).__name__
+            )
+            response = (
+                "Не удалось получить ответ от модели. "
+                "Ошибка записана в журнал."
+            )
+        except Exception as error:
+            logger.exception(
+                "Unexpected LLM request failure: error_type=%s",
+                type(error).__name__,
+            )
+            response = (
+                "Не удалось получить ответ от модели. "
+                "Ошибка записана в журнал."
+            )
         finally:
             typing_task.cancel()
             with suppress(asyncio.CancelledError):
@@ -225,6 +285,30 @@ async def handle_text(
 
         for chunk in _split_message(response):
             await message.reply_text(chunk)
+
+
+async def handle_unknown(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """Give unsupported message types a clear local response."""
+    del context
+    if update.effective_message:
+        await update.effective_message.reply_text(
+            "Этот тип сообщения пока не поддерживается. Отправьте текст."
+        )
+
+
+async def telegram_error_handler(
+    update: object, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """Log Telegram handler/send failures without message or secret contents."""
+    update_id = getattr(update, "update_id", None)
+    error = context.error
+    logger.error(
+        "Telegram update processing failed: update_id=%s error_type=%s",
+        update_id,
+        type(error).__name__,
+    )
 
 
 async def _show_typing(

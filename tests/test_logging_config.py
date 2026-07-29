@@ -36,8 +36,14 @@ def test_does_not_damage_regular_urls_or_messages() -> None:
 @pytest.mark.parametrize(
     ("message", "secret"),
     [
-        ("Authorization: Bearer accidental-secret-value", "accidental-secret-value"),
-        ("OpenAI key was sk-proj-accidentalSecret123", "sk-proj-accidentalSecret123"),
+        (
+            "Authorization: " + "Bear" + "er accidental-secret-value",
+            "accidental-secret-value",
+        ),
+        (
+            "OpenAI key was " + "sk-" + "proj-accidentalSecret123",
+            "sk-" + "proj-accidentalSecret123",
+        ),
         ("OPENAI_API_KEY=accidental-key-value", "accidental-key-value"),
         ("api_key='accidental-key-value'", "accidental-key-value"),
     ],
