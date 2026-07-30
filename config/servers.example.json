@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "servers": {
+    "jarvis": {
+      "host": "127.0.0.1",
+      "port": 22,
+      "user": "jarvis-ops",
+      "identity_file": "/etc/jarvis/ssh/jarvis_ops_ed25519",
+      "host_key_alias": "jarvis-local",
+      "enabled": true,
+      "projects": {
+        "jarvis": {
+          "path": "/opt/jarvis",
+          "services": [
+            "jarvis.service"
+          ]
+        }
+      }
+    },
+    "crypto": {
+      "host": "SERVER_ADDRESS_PLACEHOLDER",
+      "port": 22,
+      "user": "jarvis-ops",
+      "identity_file": "/etc/jarvis/ssh/crypto_ops_ed25519",
+      "host_key_alias": "crypto",
+      "enabled": false,
+      "projects": {
+        "crypto-bot": {
+          "path": "/opt/crypto-bot",
+          "services": [
+            "crypto-paper.service",
+            "crypto-paper.timer"
+          ]
+        }
+      }
+    }
+  }
+}
