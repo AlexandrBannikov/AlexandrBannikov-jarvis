@@ -109,6 +109,20 @@ class ToolAdapter:
             or schema.get("additionalProperties") is not False
         ):
             raise ValueError("Tool schema must be a strict object schema")
+        properties = schema["properties"]
+        required = schema["required"]
+        if (
+            len(required) != len(set(required))
+            or set(required) != set(properties)
+        ):
+            raise ValueError(
+                "Strict tool schema must require every declared property"
+            )
+        for property_schema in properties.values():
+            if not isinstance(property_schema, dict):
+                raise ValueError("Tool property schema must be an object")
+            if property_schema.get("type") == "object":
+                ToolAdapter._validate_schema(property_schema)
 
 
 def serialize_tool_result(

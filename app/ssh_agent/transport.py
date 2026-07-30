@@ -59,6 +59,23 @@ def _trusted_plan_shape(server: ServerConfig, plan: ExecutionPlan) -> bool:
         return argv == ("/bin/cat", "/proc/loadavg")
     if plan.operation == "uptime":
         return argv == ("/bin/cat", "/proc/uptime")
+    if plan.operation == "top_processes":
+        sort_by = plan.metadata.get("sort_by")
+        limit = plan.metadata.get("limit")
+        expected_sort = "%cpu" if sort_by == "cpu" else "%mem"
+        return (
+            sort_by in {"cpu", "memory"}
+            and isinstance(limit, int)
+            and not isinstance(limit, bool)
+            and 1 <= limit <= 30
+            and argv
+            == (
+                "/usr/bin/ps",
+                "-eo",
+                "pid=,user=,%cpu=,%mem=,etime=,comm=",
+                f"--sort=-{expected_sort}",
+            )
+        )
     services = frozenset(
         service for project in server.projects.values() for service in project.services
     )

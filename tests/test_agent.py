@@ -17,6 +17,7 @@ from app.ai.agent import (
     WEB_SEARCH_UNSUPPORTED_MESSAGE,
     JarvisAgent,
 )
+from app.ai.prompts import PROCESS_UNAVAILABLE_MESSAGE
 from app.ai.provider import (
     LLMAuthenticationError,
     LLMBadRequestError,
@@ -32,6 +33,8 @@ from app.tools.manager import ToolManager
 from app.tools.registry import ToolRegistry
 from app.tools.result import ToolResult
 from app.tools.system_info import SystemInfoTool
+from app.ssh_agent.service_models import SSHServiceResult
+from app.ssh_agent.tools import register_ssh_tools
 
 
 async def run_immediately(function, *args, **kwargs):
@@ -116,6 +119,48 @@ def manager(result: ToolResult | None = None) -> ToolManager:
     return tool_manager
 
 
+class FakeSSHService:
+    def __init__(self) -> None:
+        self.top_calls: list[tuple[str, str, int]] = []
+        self.summary_calls: list[str] = []
+
+    async def get_top_processes(
+        self, context, server_alias: str, sort_by: str, limit: int,
+    ) -> SSHServiceResult:
+        self.top_calls.append((server_alias, sort_by, limit))
+        return SSHServiceResult(
+            True, "top_processes", server_alias,
+            data={
+                "server_alias": server_alias,
+                "sort_by": sort_by,
+                "count": 1,
+                "processes": ({
+                    "pid": 1, "user": "root", "cpu_percent": 1.0,
+                    "memory_percent": 2.0, "elapsed": "00:01",
+                    "command": "python3",
+                },),
+            },
+        )
+
+    async def get_server_summary(
+        self, context, server_alias: str,
+    ) -> SSHServiceResult:
+        self.summary_calls.append(server_alias)
+        return SSHServiceResult(
+            True, "server_summary", server_alias, data={"results": ()}
+        )
+
+    @staticmethod
+    def format(result: SSHServiceResult) -> str:
+        return "Безопасный результат."
+
+
+def ssh_manager(service: FakeSSHService) -> ToolManager:
+    registry = ToolRegistry()
+    register_ssh_tools(registry, service)  # type: ignore[arg-type]
+    return ToolManager(registry)
+
+
 def test_plain_text_response_needs_no_tool() -> None:
     provider = FakeProvider([response("r1", text="Обычный ответ")])
 
@@ -129,6 +174,89 @@ def test_plain_text_response_needs_no_tool() -> None:
     assert len(provider.requests) == 1
     assert provider.requests[0]["tool_choice"] == "auto"
     assert provider.requests[0]["tools"]
+
+
+@pytest.mark.parametrize(
+    ("question", "sort_by"),
+    [
+        ("Какие процессы больше всего грузят CPU?", "cpu"),
+        ("Что использует больше всего памяти?", "memory"),
+    ],
+)
+def test_process_questions_dispatch_top_process_tool(
+    question: str, sort_by: str,
+) -> None:
+    service = FakeSSHService()
+    provider = FakeProvider(
+        [
+            response(
+                "r1",
+                calls=[
+                    call(
+                        "c1",
+                        "get_top_processes",
+                        json.dumps({
+                            "server_alias": "crypto",
+                            "sort_by": sort_by,
+                            "limit": 5,
+                        }),
+                    )
+                ],
+            ),
+            response("r2", text="На сервере **crypto** нагрузка невысокая."),
+        ]
+    )
+
+    answer = asyncio.run(
+        JarvisAgent(
+            provider, ssh_manager(service), run_sync=run_immediately,
+        ).ask(
+            question, user_id=123, chat_id=456, source_message_id=7,
+            is_allowlisted=True,
+        )
+    )
+
+    assert service.top_calls == [("crypto", sort_by, 5)]
+    assert answer.startswith("На сервере **crypto**")
+
+
+def test_server_summary_request_does_not_dispatch_top_process_tool() -> None:
+    service = FakeSSHService()
+    provider = FakeProvider(
+        [
+            response(
+                "r1",
+                calls=[
+                    call(
+                        "c1", "get_server_summary",
+                        '{"server_alias":"crypto"}',
+                    )
+                ],
+            ),
+            response("r2", text="Сводка сервера **crypto** готова."),
+        ]
+    )
+
+    answer = asyncio.run(
+        JarvisAgent(
+            provider, ssh_manager(service), run_sync=run_immediately,
+        ).ask(
+            "Покажи обычную сводку сервера crypto",
+            user_id=123, chat_id=456, source_message_id=8,
+            is_allowlisted=True,
+        )
+    )
+
+    assert service.summary_calls == ["crypto"]
+    assert not service.top_calls
+    assert "**crypto**" in answer
+
+
+def test_human_limit_message_avoids_internal_vocabulary_and_backticks() -> None:
+    lowered = PROCESS_UNAVAILABLE_MESSAGE.lower()
+    for forbidden in ("read-only инструмент", "schema", "alias", "tool"):
+        assert forbidden not in lowered
+    assert "`" not in PROCESS_UNAVAILABLE_MESSAGE
 
 
 def test_web_search_is_offered_but_not_required_for_ordinary_question() -> None:
@@ -328,6 +456,22 @@ def test_unsupported_search_model_has_specific_message() -> None:
     assert answer == WEB_SEARCH_UNSUPPORTED_MESSAGE
 
 
+def test_bad_request_does_not_claim_web_search_is_unsupported() -> None:
+    answer = asyncio.run(
+        JarvisAgent(
+            FakeProvider([LLMBadRequestError()]),
+            manager(),
+            run_sync=run_immediately,
+            web_search_enabled=True,
+        ).ask("Покажи список серверов")
+    )
+
+    assert answer == (
+        "Не удалось обработать запрос из-за ошибки конфигурации инструментов."
+    )
+    assert answer != WEB_SEARCH_UNSUPPORTED_MESSAGE
+
+
 def test_search_failure_can_fall_back_for_stable_question() -> None:
     provider = FakeProvider(
         [
@@ -499,7 +643,7 @@ def test_empty_final_response_has_safe_message() -> None:
         (LLMAuthenticationError(), "Ошибка авторизации"),
         (LLMNetworkError(), "Временная ошибка OpenAI"),
         (LLMPermissionError(), "недоступна для этого проекта"),
-        (LLMBadRequestError(), "модель недоступна"),
+        (LLMBadRequestError(), "ошибки конфигурации инструментов"),
         (LLMModelUnavailableError(), "модель недоступна"),
     ],
 )

@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 
@@ -12,6 +13,9 @@ from app.ai.tool_adapter import (
     serialize_tool_result,
 )
 from app.infrastructure.hosts import HostConfig, HostsConfig
+from app.memory.tools import register_memory_tools
+from app.reminders.tools import register_reminder_tools
+from app.ssh_agent.tools import register_ssh_tools
 from app.tools.registry import ToolRegistry
 from app.tools.remote_service_status import RemoteServiceStatusTool
 from app.tools.remote_system_info import RemoteSystemInfoTool
@@ -60,6 +64,40 @@ def test_all_tools_are_strict_responses_api_functions() -> None:
         assert item["parameters"]["type"] == "object"
         assert item["parameters"]["additionalProperties"] is False
         assert isinstance(item["parameters"]["required"], list)
+
+
+def test_all_production_function_tools_have_complete_strict_schemas() -> None:
+    registry = ToolRegistry()
+    registry.register(SystemInfoTool())
+    register_memory_tools(registry, Mock())
+    register_ssh_tools(registry, Mock())
+    register_reminder_tools(registry, Mock())
+
+    schemas = ToolAdapter(registry).schemas()
+
+    assert {
+        "system_info",
+        "remember",
+        "list_ssh_servers",
+        "get_server_summary",
+        "get_project_summary",
+        "get_service_recent_logs",
+        "create_reminder",
+    } <= {item["name"] for item in schemas}
+
+    def assert_strict_object(schema: dict) -> None:
+        assert schema["type"] == "object"
+        assert schema["additionalProperties"] is False
+        assert isinstance(schema["properties"], dict)
+        assert set(schema["required"]) == set(schema["properties"])
+        for child in schema["properties"].values():
+            if child.get("type") == "object":
+                assert_strict_object(child)
+
+    for item in schemas:
+        assert item["type"] == "function"
+        assert item["strict"] is True
+        assert_strict_object(item["parameters"])
 
 
 def test_system_info_schema_has_no_arguments() -> None:

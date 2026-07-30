@@ -55,6 +55,9 @@ WEB_SEARCH_SECRET_MESSAGE = (
     "Запрос содержит потенциальный секрет. Удалите или замените его перед "
     "поиском в интернете."
 )
+INVALID_TOOL_CONFIGURATION_MESSAGE = (
+    "Не удалось обработать запрос из-за ошибки конфигурации инструментов."
+)
 _SECRET_PATTERNS = (
     re.compile(r"\bsk-[A-Za-z0-9_-]{8,}\b"),
     re.compile(r"(?i)\bBearer\s+\S+"),
@@ -291,7 +294,10 @@ class JarvisAgent:
         except LLMPermissionError:
             error_type = "permission_denied"
             return "Выбранная модель недоступна для этого проекта."
-        except (LLMBadRequestError, LLMModelUnavailableError):
+        except LLMBadRequestError:
+            error_type = "invalid_request"
+            return INVALID_TOOL_CONFIGURATION_MESSAGE
+        except LLMModelUnavailableError:
             error_type = "model_unavailable"
             return "Выбранная модель недоступна. Обратитесь к администратору."
         except LLMRateLimitError:

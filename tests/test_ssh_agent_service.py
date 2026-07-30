@@ -10,7 +10,7 @@ from app.ssh_agent.limits import BusyError, ConcurrencyLimiter, RateLimiter
 from app.ssh_agent.models import ProjectConfig, SSHAgentConfig, ServerConfig
 from app.ssh_agent.parsers import (
     parse_disk, parse_git_status, parse_last_commit, parse_load, parse_memory,
-    parse_service, parse_uptime,
+    parse_processes, parse_service, parse_uptime,
 )
 from app.ssh_agent.registry import ServerRegistry
 from app.ssh_agent.service import SSHService, parse_feature_flag, ssh_enabled_from_environment
@@ -44,6 +44,10 @@ OUTPUTS = {
     "service_recent_logs": "2026-01-01 safe line\n",
     "project_git_status": "## main...origin/main [ahead 1]\n M file.py\n",
     "project_last_commit": "abc1234\x00message\x002026-01-01T00:00:00Z\n",
+    "top_processes": (
+        "101 root 4.2 6.8 12-03:04:05 python3\n"
+        "202 nobody 1.1 3.4 05:06 xray\n"
+    ),
 }
 
 
@@ -150,6 +154,7 @@ async def test_concurrency_released_on_cancellation() -> None:
         ("get_memory_usage", ("alpha",), "memory_usage"),
         ("get_load_average", ("alpha",), "load_average"),
         ("get_uptime", ("alpha",), "uptime"),
+        ("get_top_processes", ("alpha", "cpu", 2), "top_processes"),
         ("get_service_status", ("alpha", "app", "app.service"), "service_status"),
         ("get_service_recent_logs", ("alpha", "app", "app.service"), "service_recent_logs"),
         ("get_project_status", ("alpha", "app"), "project_git_status"),
@@ -214,6 +219,80 @@ def test_fixed_output_parsers_valid_and_malformed() -> None:
         with pytest.raises((ValueError, KeyError, IndexError)):
             parser("malformed")
     assert parse_service("missing")["active_state"] is None
+
+
+def test_parse_processes_is_bounded_and_never_returns_cmdline() -> None:
+    parsed = parse_processes(OUTPUTS["top_processes"], 1)
+    assert parsed == {
+        "count": 1,
+        "processes": (
+            {
+                "pid": 101,
+                "user": "root",
+                "cpu_percent": 4.2,
+                "memory_percent": 6.8,
+                "elapsed": "12-03:04:05",
+                "command": "python3",
+            },
+        ),
+    }
+    assert "args" not in str(parsed).lower()
+    assert "cmdline" not in str(parsed).lower()
+
+
+def test_parse_processes_empty_and_malformed() -> None:
+    assert parse_processes("", 5) == {"count": 0, "processes": ()}
+    with pytest.raises(ValueError):
+        parse_processes("broken process line", 5)
+    with pytest.raises(ValueError):
+        parse_processes("1 root 1.0 2.0 00:01 /usr/bin/python", 5)
+
+
+@pytest.mark.asyncio
+async def test_top_process_service_adds_safe_context_and_formats() -> None:
+    transport = FakeTransport()
+    service = SSHService(registry(), enabled=True, transport=transport)
+    result = await service.get_top_processes(context(), "alpha", "memory", 2)
+    assert result.success
+    assert result.data["server_alias"] == "alpha"
+    assert result.data["sort_by"] == "memory"
+    assert result.data["count"] == 2
+    assert all(
+        set(item) == {
+            "pid", "user", "cpu_percent", "memory_percent", "elapsed",
+            "command",
+        }
+        for item in result.data["processes"]
+    )
+    assert "python3" in format_result(result)
+
+
+@pytest.mark.asyncio
+async def test_top_process_timeout_is_mapped_and_audited(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    class TimeoutTransport:
+        async def __call__(self, server, plan):
+            return ExecutionResult(
+                plan.operation, server.alias, False, 255, "", "", 0,
+                False, True, ErrorCode.SSH_COMMAND_TIMEOUT, 10_000,
+            )
+
+    service = SSHService(registry(), enabled=True, transport=TimeoutTransport())
+    with caplog.at_level("INFO", logger="jarvis.ssh_agent.service"):
+        result = await service.get_top_processes(
+            context(), "alpha", "cpu", 5
+        )
+
+    assert not result.success
+    assert result.error_code is ErrorCode.SSH_COMMAND_TIMEOUT
+    records = [
+        record for record in caplog.records
+        if record.getMessage() == "ssh_service_request"
+    ]
+    assert records
+    assert records[-1].operation == "top_processes"
+    assert records[-1].result_code == "SSH_COMMAND_TIMEOUT"
 
 
 def test_formatter_redacts_and_never_exposes_config() -> None:

@@ -59,7 +59,7 @@ def make_policy(*, service_count: int = 2) -> CommandPolicy:
 
 def test_catalog_contains_exact_supported_operations() -> None:
     assert set(OPERATION_CATALOG) == {operation.value for operation in OperationName}
-    assert len(OPERATION_CATALOG) == 12
+    assert len(OPERATION_CATALOG) == 13
 
 
 def test_unknown_operation_rejected() -> None:
@@ -157,6 +157,26 @@ def test_exact_journal_argv_and_default_lines() -> None:
     assert plan.sensitive_output
 
 
+@pytest.mark.parametrize(
+    ("sort_by", "sort_argument"),
+    [("cpu", "--sort=-%cpu"), ("memory", "--sort=-%mem")],
+)
+def test_exact_top_processes_argv(
+    sort_by: str, sort_argument: str,
+) -> None:
+    plan = make_policy().build_plan(
+        "top_processes", "alpha", sort_by=sort_by, limit=7
+    )
+    assert isinstance(plan, ExecutionPlan)
+    assert plan.argv == (
+        "/usr/bin/ps",
+        "-eo",
+        "pid=,user=,%cpu=,%mem=,etime=,comm=",
+        sort_argument,
+    )
+    assert plan.metadata == {"sort_by": sort_by, "limit": 7}
+
+
 @pytest.mark.parametrize("lines", [1, 200])
 def test_journal_line_boundaries_accepted(lines: int) -> None:
     plan = make_policy().build_plan(
@@ -181,6 +201,27 @@ def test_invalid_journal_line_limits(lines: object) -> None:
             lines=lines,  # type: ignore[arg-type]
         )
     assert caught.value.code == ErrorCode.INVALID_LINE_LIMIT
+
+
+@pytest.mark.parametrize(
+    ("sort_by", "limit", "code"),
+    [
+        ("disk", 5, ErrorCode.INVALID_PROCESS_SORT),
+        (None, 5, ErrorCode.INVALID_PROCESS_SORT),
+        ("cpu", 0, ErrorCode.INVALID_PROCESS_LIMIT),
+        ("memory", 31, ErrorCode.INVALID_PROCESS_LIMIT),
+        ("cpu", True, ErrorCode.INVALID_PROCESS_LIMIT),
+    ],
+)
+def test_invalid_top_process_parameters(
+    sort_by: object, limit: object, code: ErrorCode,
+) -> None:
+    with pytest.raises(OperationPolicyError) as caught:
+        make_policy().build_plan(
+            "top_processes", "alpha",
+            sort_by=sort_by, limit=limit,  # type: ignore[arg-type]
+        )
+    assert caught.value.code == code
 
 
 @pytest.mark.parametrize(

@@ -21,6 +21,9 @@ DEFAULT_JOURNAL_LINES = 50
 MIN_JOURNAL_LINES = 1
 MAX_JOURNAL_LINES = 200
 MAX_PROJECT_SUMMARY_SERVICES = 32
+MIN_PROCESS_LIMIT = 1
+MAX_PROCESS_LIMIT = 30
+PROCESS_SORTS = frozenset({"cpu", "memory"})
 
 _STATUS_PROPERTIES = (
     "Id",
@@ -47,6 +50,8 @@ class CommandPolicy:
         project_alias: str | None = None,
         service_name: str | None = None,
         lines: int | None = None,
+        sort_by: str | None = None,
+        limit: int | None = None,
     ) -> (
         ExecutionPlan
         | CompositeExecutionPlan
@@ -72,6 +77,14 @@ class CommandPolicy:
             raise OperationPolicyError(ErrorCode.OPERATION_PARAMETER_FORBIDDEN)
         if definition.accepts_lines:
             lines = self._validate_lines(lines)
+        if not definition.accepts_sort_by and sort_by is not None:
+            raise OperationPolicyError(ErrorCode.OPERATION_PARAMETER_FORBIDDEN)
+        if definition.accepts_sort_by:
+            sort_by = self._validate_process_sort(sort_by)
+        if not definition.accepts_limit and limit is not None:
+            raise OperationPolicyError(ErrorCode.OPERATION_PARAMETER_FORBIDDEN)
+        if definition.accepts_limit:
+            limit = self._validate_process_limit(limit)
 
         if operation == OperationName.LIST_SERVERS:
             return self._list_servers()
@@ -105,6 +118,8 @@ class CommandPolicy:
             project=project,
             service_name=service_name,
             lines=lines,
+            sort_by=sort_by,
+            limit=limit,
         )
         self._validate_authorized_plan(plan, project)
         return plan
@@ -175,6 +190,22 @@ class CommandPolicy:
             raise OperationPolicyError(ErrorCode.INVALID_LINE_LIMIT)
         return lines
 
+    @staticmethod
+    def _validate_process_sort(sort_by: str | None) -> str:
+        if sort_by not in PROCESS_SORTS:
+            raise OperationPolicyError(ErrorCode.INVALID_PROCESS_SORT)
+        return sort_by
+
+    @staticmethod
+    def _validate_process_limit(limit: int | None) -> int:
+        if (
+            isinstance(limit, bool)
+            or not isinstance(limit, int)
+            or not MIN_PROCESS_LIMIT <= limit <= MAX_PROCESS_LIMIT
+        ):
+            raise OperationPolicyError(ErrorCode.INVALID_PROCESS_LIMIT)
+        return limit
+
     def _list_servers(self) -> ServerListResult:
         return ServerListResult(
             tuple(
@@ -204,6 +235,8 @@ class CommandPolicy:
         project: ProjectConfig | None = None,
         service_name: str | None = None,
         lines: int | None = None,
+        sort_by: str | None = None,
+        limit: int | None = None,
     ) -> ExecutionPlan:
         if operation == OperationName.DISK_USAGE:
             return self._fixed_plan(
@@ -259,6 +292,23 @@ class CommandPolicy:
                 lines,
                 sensitive_output=True,
                 metadata={"service": service_name, "lines": lines},
+            )
+        if operation == OperationName.TOP_PROCESSES:
+            assert sort_by is not None and limit is not None
+            sort_field = "%cpu" if sort_by == "cpu" else "%mem"
+            return self._fixed_plan(
+                operation,
+                server_alias,
+                (
+                    "/usr/bin/ps",
+                    "-eo",
+                    "pid=,user=,%cpu=,%mem=,etime=,comm=",
+                    f"--sort=-{sort_field}",
+                ),
+                10,
+                256_000,
+                1_000,
+                metadata={"sort_by": sort_by, "limit": limit},
             )
         if operation == OperationName.PROJECT_GIT_STATUS:
             assert project is not None

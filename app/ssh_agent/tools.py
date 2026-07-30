@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, is_dataclass
+from collections.abc import Mapping
+from dataclasses import fields, is_dataclass
 from enum import Enum
+from pathlib import Path
 from typing import Any
 import re
 
@@ -23,18 +25,30 @@ def _schema(properties: dict[str, dict[str, Any]], required: list[str]) -> dict[
 
 def _safe_value(value: object) -> object:
     if isinstance(value, Enum):
-        return value.value
+        return _safe_value(value.value)
     if is_dataclass(value) and not isinstance(value, type):
-        return _safe_value(asdict(value))
-    if isinstance(value, dict) or hasattr(value, "items"):
-        return {str(key): _safe_value(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
+        return {
+            field.name: _safe_value(getattr(value, field.name))
+            for field in fields(value)
+        }
+    if isinstance(value, Mapping):
+        return {_safe_key(key): _safe_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set, frozenset)):
         return [_safe_value(item) for item in value]
+    if isinstance(value, Path):
+        return redact_secrets(str(value))[:256]
     if isinstance(value, str):
         return redact_secrets(value)
     if value is None or isinstance(value, (int, float, bool)):
         return value
-    return str(value)[:256]
+    return "[UNSUPPORTED]"
+
+
+def _safe_key(value: object) -> str:
+    safe = _safe_value(value)
+    if safe is None or isinstance(safe, (str, int, float, bool)):
+        return str(safe)
+    return "[UNSUPPORTED]"
 
 
 class SSHServiceTool(Tool):
@@ -55,6 +69,12 @@ class SSHServiceTool(Tool):
             if name == "lines":
                 if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 200:
                     raise ValueError("invalid line limit")
+            elif name == "limit":
+                if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 30:
+                    raise ValueError("invalid process limit")
+            elif name == "sort_by":
+                if value not in {"cpu", "memory"}:
+                    raise ValueError("invalid process sort")
             elif (
                 not isinstance(value, str)
                 or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.@:-]{0,127}", value) is None
@@ -143,6 +163,23 @@ class GetServerUptimeTool(ServerTool):
     service_method = "get_uptime"
 
 
+class GetTopProcessesTool(SSHServiceTool):
+    name = "get_top_processes"
+    description = (
+        "List a bounded set of current processes using the most CPU or memory "
+        "on one configured server. Returns comm only, never command arguments."
+    )
+    service_method = "get_top_processes"
+
+    def parameters(self) -> dict[str, Any]:
+        properties = {
+            "server_alias": {"type": "string"},
+            "sort_by": {"type": "string", "enum": ["cpu", "memory"]},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 30},
+        }
+        return _schema(properties, list(properties))
+
+
 class GetServiceStatusTool(SSHServiceTool):
     name = "get_service_status"
     description = "Get read-only status of one allowlisted service in a configured project."
@@ -165,7 +202,10 @@ class GetServiceRecentLogsTool(GetServiceStatusTool):
     def parameters(self) -> dict[str, Any]:
         properties = dict(super().parameters()["properties"])
         properties["lines"] = {"type": "integer", "minimum": 1, "maximum": 200}
-        return _schema(properties, ["server_alias", "project_alias", "service_name"])
+        return _schema(
+            properties,
+            ["server_alias", "project_alias", "service_name", "lines"],
+        )
 
 
 class GetProjectStatusTool(ProjectTool):
@@ -189,6 +229,7 @@ class GetProjectSummaryTool(ProjectTool):
 SSH_TOOL_TYPES = (
     ListSSHServersTool, ListServerProjectsTool, GetServerSummaryTool,
     GetServerDiskUsageTool, GetServerMemoryUsageTool, GetServerUptimeTool,
+    GetTopProcessesTool,
     GetServiceStatusTool, GetServiceRecentLogsTool, GetProjectStatusTool,
     GetProjectLastCommitTool, GetProjectSummaryTool,
 )

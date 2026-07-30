@@ -19,7 +19,7 @@ from .formatter import format_result
 from .limits import BusyError, ConcurrencyLimiter, RateLimiter
 from .metrics import SSHMetrics
 from .operations import OperationName
-from .parsers import PARSERS
+from .parsers import PARSERS, parse_processes
 from .policy import CommandPolicy
 from .registry import ServerRegistry
 from .service_models import SSHRequestContext, SSHServiceResult
@@ -111,6 +111,15 @@ class SSHService:
 
     async def get_uptime(self, context: SSHRequestContext, server_alias: str) -> SSHServiceResult:
         return await self._request(context, OperationName.UPTIME, server_alias)
+
+    async def get_top_processes(
+        self, context: SSHRequestContext, server_alias: str,
+        sort_by: str, limit: int,
+    ) -> SSHServiceResult:
+        return await self._request(
+            context, OperationName.TOP_PROCESSES, server_alias,
+            sort_by=sort_by, limit=limit,
+        )
 
     async def get_service_status(self, context: SSHRequestContext, server_alias: str,
                                  project_alias: str, service_name: str) -> SSHServiceResult:
@@ -239,7 +248,20 @@ class SSHService:
                                  truncated=raw.truncated, duration_ms=raw.duration_ms)
         parser = PARSERS.get(plan.operation)
         try:
-            data = parser(raw.stdout) if parser else {"summary": raw.stdout[:4096]}
+            if plan.operation == OperationName.TOP_PROCESSES:
+                limit = plan.metadata.get("limit")
+                sort_by = plan.metadata.get("sort_by")
+                if not isinstance(limit, int) or not isinstance(sort_by, str):
+                    raise ValueError
+                data = parse_processes(raw.stdout, limit)
+                data.update(
+                    {
+                        "server_alias": plan.server_alias,
+                        "sort_by": sort_by,
+                    }
+                )
+            else:
+                data = parser(raw.stdout) if parser else {"summary": raw.stdout[:4096]}
             warning = ""
         except (ValueError, KeyError, OverflowError):
             data = {"summary": raw.stdout[:4096]}

@@ -174,6 +174,39 @@ def test_remote_encoder_quotes_each_argument_and_round_trips() -> None:
     assert "'/opt/apps/my app'" in encoded
 
 
+@pytest.mark.parametrize(
+    ("sort_by", "sort_argument"),
+    [("cpu", "--sort=-%cpu"), ("memory", "--sort=-%mem")],
+)
+def test_top_process_transport_accepts_only_fixed_ps_shape(
+    sort_by: str, sort_argument: str,
+) -> None:
+    value = plan(
+        operation="top_processes",
+        argv=(
+            "/usr/bin/ps",
+            "-eo",
+            "pid=,user=,%cpu=,%mem=,etime=,comm=",
+            sort_argument,
+        ),
+        metadata={"sort_by": sort_by, "limit": 10},
+    )
+    encoded = transport._encode_plan(value, server())
+    assert shlex.split(encoded) == list(value.argv)
+    assert "args" not in encoded
+    assert "cmdline" not in encoded
+
+    with pytest.raises(Exception):
+        transport._encode_plan(
+            plan(
+                operation="top_processes",
+                argv=("/usr/bin/ps", "-eo", "pid=,args="),
+                metadata={"sort_by": sort_by, "limit": 10},
+            ),
+            server(),
+        )
+
+
 @pytest.mark.parametrize("payload", ["x;id", "x|id", "$(id)", "x\nid", "x\x00id"])
 def test_shell_syntax_cannot_enter_remote_command(payload: str) -> None:
     with pytest.raises(Exception):

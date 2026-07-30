@@ -1,6 +1,7 @@
 """OpenAI implementation of the LLM provider interface."""
 
 import logging
+import re
 import time
 
 from openai import (
@@ -30,6 +31,7 @@ from app.ai.provider import (
     LLMWebSearchUnavailableError,
     LLMWebSearchUnsupportedError,
 )
+from app.logging_config import sanitize_log_text
 
 logger = logging.getLogger(__name__)
 DEFAULT_OPENAI_MODEL = "gpt-5.6-sol"
@@ -74,6 +76,51 @@ def _exception_chain(error: BaseException) -> str:
         )
         current = current.__cause__ or current.__context__
     return "->".join(names)
+
+
+def _error_fields(error: APIError) -> dict[str, str]:
+    """Extract bounded, sanitized OpenAI error metadata without request data."""
+    body = getattr(error, "body", None)
+    if isinstance(body, dict) and isinstance(body.get("error"), dict):
+        body = body["error"]
+    source = body if isinstance(body, dict) else {}
+
+    def safe(name: str, fallback: object = "") -> str:
+        value = source.get(name, fallback)
+        text = sanitize_log_text(value or "none")
+        text = re.sub(r"[\x00-\x1f\x7f]+", " ", text).strip()
+        return text[:240] or "none"
+
+    return {
+        "code": safe("code", getattr(error, "code", "")),
+        "type": safe("type", getattr(error, "type", "")),
+        "param": safe("param", getattr(error, "param", "")),
+        "message": safe("message", getattr(error, "message", "")),
+    }
+
+
+def _is_web_search_unsupported(error: APIError) -> bool:
+    fields = _error_fields(error)
+    code_and_type = f"{fields['code']} {fields['type']}".lower()
+    if any(
+        marker in code_and_type
+        for marker in (
+            "web_search_unsupported",
+            "unsupported_web_search",
+            "web_search_not_supported",
+        )
+    ):
+        return True
+    message = fields["message"].lower()
+    param = fields["param"].lower()
+    names_web_search = "web_search" in message or "web search" in message
+    states_unsupported = any(
+        marker in message
+        for marker in ("unsupported", "not supported", "does not support")
+    )
+    return names_web_search and states_unsupported and (
+        param == "none" or param.startswith("tools")
+    )
 
 
 class OpenAIProvider(LLMProvider):
@@ -192,20 +239,31 @@ class OpenAIProvider(LLMProvider):
             )
             raise
         except APIError as error:
+            fields = _error_fields(error)
             logger.error(
                 "OpenAI request failed: provider=openai model=%s "
                 "endpoint=%s status=%s request_id=%s error_type=%s "
-                "error_chain=%s duration_ms=%.3f",
+                "error_chain=%s error_code=%s api_error_type=%s "
+                "error_param=%s error_message=%s duration_ms=%.3f",
                 model,
                 RESPONSES_ENDPOINT,
                 _status_code(error),
                 _request_id(error),
                 type(error).__name__,
                 _exception_chain(error),
+                fields["code"],
+                fields["type"],
+                fields["param"],
+                fields["message"],
                 (time.monotonic() - started_at) * 1_000,
             )
-            if web_search_enabled and isinstance(
-                error, (PermissionDeniedError, NotFoundError, BadRequestError)
+            if (
+                web_search_enabled
+                and isinstance(
+                    error,
+                    (PermissionDeniedError, NotFoundError, BadRequestError),
+                )
+                and _is_web_search_unsupported(error)
             ):
                 translated = LLMWebSearchUnsupportedError(
                     "Hosted web search is unsupported"

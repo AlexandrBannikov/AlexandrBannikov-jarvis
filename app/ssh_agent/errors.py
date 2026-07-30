@@ -16,6 +16,8 @@ class ErrorCode(StrEnum):
     OPERATION_PARAMETER_REQUIRED = "OPERATION_PARAMETER_REQUIRED"
     OPERATION_PARAMETER_FORBIDDEN = "OPERATION_PARAMETER_FORBIDDEN"
     INVALID_LINE_LIMIT = "INVALID_LINE_LIMIT"
+    INVALID_PROCESS_SORT = "INVALID_PROCESS_SORT"
+    INVALID_PROCESS_LIMIT = "INVALID_PROCESS_LIMIT"
     EXECUTION_PLAN_UNSAFE = "EXECUTION_PLAN_UNSAFE"
     SSH_EXECUTABLE_NOT_FOUND = "SSH_EXECUTABLE_NOT_FOUND"
     SSH_CONNECTION_REFUSED = "SSH_CONNECTION_REFUSED"
@@ -60,6 +62,8 @@ _MESSAGES = {
     ErrorCode.OPERATION_PARAMETER_REQUIRED: "Обязательный параметр операции не указан.",
     ErrorCode.OPERATION_PARAMETER_FORBIDDEN: "Параметр не разрешён для этой операции.",
     ErrorCode.INVALID_LINE_LIMIT: "Количество строк журнала некорректно.",
+    ErrorCode.INVALID_PROCESS_SORT: "Способ сортировки процессов некорректен.",
+    ErrorCode.INVALID_PROCESS_LIMIT: "Количество процессов некорректно.",
     ErrorCode.EXECUTION_PLAN_UNSAFE: "План выполнения SSH Agent небезопасен.",
     ErrorCode.SSH_EXECUTABLE_NOT_FOUND: "Системный SSH-клиент недоступен.",
     ErrorCode.SSH_CONNECTION_REFUSED: "SSH-соединение отклонено.",

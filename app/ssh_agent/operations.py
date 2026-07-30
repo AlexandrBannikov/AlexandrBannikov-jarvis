@@ -19,6 +19,7 @@ class OperationName(StrEnum):
     PROJECT_SUMMARY = "project_summary"
     LIST_SERVERS = "list_servers"
     LIST_PROJECTS = "list_projects"
+    TOP_PROCESSES = "top_processes"
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,6 +30,8 @@ class OperationDefinition:
     requires_project: bool = False
     requires_service: bool = False
     accepts_lines: bool = False
+    accepts_sort_by: bool = False
+    accepts_limit: bool = False
     composite: bool = False
 
 
@@ -71,6 +74,12 @@ OPERATION_CATALOG: Mapping[str, OperationDefinition] = MappingProxyType(
             ),
             OperationDefinition(
                 OperationName.LIST_PROJECTS, False, requires_project=False
+            ),
+            OperationDefinition(
+                OperationName.TOP_PROCESSES,
+                True,
+                accepts_sort_by=True,
+                accepts_limit=True,
             ),
         )
     }
