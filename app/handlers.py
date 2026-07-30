@@ -34,6 +34,9 @@ HELP_MESSAGE = (
     "/tool system_info — локальная диагностика\n"
     "Проверки удалённых серверов выполняются только через утверждённые SSH tools.\n"
     "/tools — показать безопасные инструменты"
+    "\n/memory — краткая сводка долговременной памяти"
+    "\n/memory_projects — известные проекты"
+    "\n/memory_forget <id> — забыть принадлежащую вам запись"
 )
 PROCESS_STARTED_AT = time.monotonic()
 MAX_INPUT_LENGTH = 4_000
@@ -212,6 +215,55 @@ async def tools_command(
         for tool in manager.registry.list_tools()
     )
     await message.reply_text("\n".join(lines))
+
+
+def _memory_owner(update: Update) -> int:
+    return update.effective_user.id if update.effective_user else 0
+
+
+async def memory_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message=update.effective_message
+    if message is None: return
+    manager=context.application.bot_data.get("memory_manager")
+    if manager is None:
+        await message.reply_text("Долговременная память отключена.")
+        return
+    owner=_memory_owner(update)
+    records=manager.service.recall(owner,limit=8)
+    projects=manager.storage.list_projects(owner)
+    lines=[f"Память включена. Активных записей: {manager.storage.count_active(owner)}.",
+           "Известные проекты: "+(", ".join(p.name for p in projects) or "нет.")]
+    lines.extend(f"- #{r.id} [{r.scope}] {r.summary}" for r in records[:5])
+    await message.reply_text("\n".join(lines))
+
+
+async def memory_status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await memory_command(update,context)
+
+
+async def memory_projects_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message=update.effective_message
+    if message is None: return
+    manager=context.application.bot_data.get("memory_manager")
+    if manager is None:
+        await message.reply_text("Долговременная память отключена."); return
+    projects=manager.storage.list_projects(_memory_owner(update))
+    await message.reply_text("\n".join(
+        [f"- {p.name}: {p.status or p.current_milestone or 'статус не указан'}"
+         for p in projects]) or "Известных проектов нет.")
+
+
+async def memory_forget_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message=update.effective_message
+    if message is None: return
+    manager=context.application.bot_data.get("memory_manager")
+    if manager is None:
+        await message.reply_text("Долговременная память отключена."); return
+    if len(context.args)!=1 or not context.args[0].isdigit():
+        await message.reply_text("Использование: /memory_forget <id>"); return
+    forgotten=manager.service.forget(_memory_owner(update),int(context.args[0]))
+    await message.reply_text("Запись забыта." if forgotten else
+                             "Запись не найдена или принадлежит другому пользователю.")
 
 
 async def handle_text(

@@ -8,6 +8,7 @@ from app.memory.models import MEMORY_TYPES, MemoryRecord
 from app.memory.retrieval import MemoryRetrieval
 from app.memory.security import contains_secret
 from app.memory.storage import MemoryStorage
+from app.memory.service import MemoryService
 
 
 _AUTOSAVE = re.compile(
@@ -30,6 +31,7 @@ class MemoryManager:
         autosave: bool = True,
         summarization: bool = True,
         summary_threshold: int = 25,
+        max_context_items: int | None = None,
     ) -> None:
         self.storage = storage
         self.retrieval = MemoryRetrieval(storage)
@@ -40,6 +42,12 @@ class MemoryManager:
         self.summarization_enabled = summarization
         self.summary_threshold = summary_threshold
         self.storage.initialize()
+        self.service = MemoryService(
+            storage,
+            max_context_items=max_context_items or max_results,
+            max_context_chars=max_context,
+            auto_extract=autosave,
+        )
 
     def remember(
         self,
@@ -51,11 +59,14 @@ class MemoryManager:
         project: str | None = None,
         importance: int = 5,
         source: str = "user",
+        owner_id: int = 0,
+        confidence: float = 1.0,
+        expires_at: str | None = None,
     ) -> MemoryRecord:
         self._validate(memory_type, title, content, importance)
         target_project = (project or self.project).strip()
         duplicate = self.storage.find_duplicate(
-            content=content.strip(), project=target_project
+            content=content.strip(), project=target_project, owner_id=owner_id
         )
         if duplicate is not None:
             return duplicate
@@ -67,6 +78,9 @@ class MemoryManager:
             project=target_project,
             importance=importance,
             source=source.strip()[:100] or "user",
+            owner_id=owner_id,
+            confidence=confidence,
+            expires_at=expires_at,
         )
         self.maybe_summarize(target_project)
         return record
@@ -79,6 +93,7 @@ class MemoryManager:
         content: str,
         tags: list[str] | tuple[str, ...],
         importance: int,
+        owner_id: int = 0,
     ) -> MemoryRecord:
         self._validate("note", title, content, importance)
         return self.storage.update(
@@ -87,10 +102,11 @@ class MemoryManager:
             content=content.strip(),
             tags=self._normalize_tags(tags),
             importance=importance,
+            owner_id=owner_id,
         )
 
-    def forget(self, memory_id: int) -> bool:
-        return self.storage.forget(memory_id)
+    def forget(self, memory_id: int, *, owner_id: int = 0) -> bool:
+        return self.storage.forget(memory_id, owner_id)
 
     def search(
         self,
@@ -98,25 +114,32 @@ class MemoryManager:
         *,
         project: str | None = None,
         max_results: int | None = None,
+        owner_id: int = 0,
     ) -> list[MemoryRecord]:
-        return self.retrieval.search(
-            query,
-            project=(project or self.project),
-            max_results=min(max_results or self.max_results, self.max_results),
-        )
+        if owner_id == 0:
+            return self.retrieval.search(
+                query, project=(project or self.project),
+                max_results=min(max_results or self.max_results, self.max_results))
+        return self.service.recall(owner_id, query, namespace=project,
+                                   limit=min(max_results or self.max_results, self.max_results))
 
     def list_project(
         self,
         *,
         project: str | None = None,
         max_results: int | None = None,
+        owner_id: int = 0,
     ) -> list[MemoryRecord]:
-        return self.retrieval.list_project(
-            project or self.project,
-            max_results=min(max_results or self.max_results, self.max_results),
-        )
+        if owner_id == 0:
+            return self.retrieval.list_project(
+                project or self.project,
+                max_results=min(max_results or self.max_results, self.max_results))
+        return self.service.recall(owner_id, namespace=project or self.project,
+                                   limit=min(max_results or self.max_results, self.max_results))
 
-    def relevant_context(self, query: str) -> str:
+    def relevant_context(self, query: str, *, owner_id: int = 0) -> str:
+        if owner_id:
+            return self.service.build_user_context(owner_id, query)
         records = self.search(query)
         if not records:
             return ""
@@ -136,7 +159,10 @@ class MemoryManager:
             length += len(item)
         return "".join(parts)
 
-    def autosave(self, user_text: str) -> MemoryRecord | None:
+    def autosave(self, user_text: str, *, owner_id: int = 0) -> MemoryRecord | None:
+        if owner_id:
+            records = self.service.extract_and_remember(owner_id, user_text)
+            return records[0] if records else None
         if not self.autosave_enabled or contains_secret(user_text):
             return None
         match = _AUTOSAVE.match(user_text)

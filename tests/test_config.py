@@ -73,7 +73,8 @@ def test_load_config_uses_llm_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert config.memory_max_results == 7
     assert config.memory_autosave is True
     assert config.memory_summarization is True
-    assert config.memory_db_path == Path("data/memory.db")
+    assert config.memory_db_path == Path("/var/lib/jarvis/memory.db")
+    assert config.memory_max_context_items == 20
     assert config.reminders_enabled is False
     assert config.reminders_default_timezone == "UTC"
     assert config.reminders_db_path == Path("/var/lib/jarvis/reminders.db")

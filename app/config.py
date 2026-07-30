@@ -32,10 +32,11 @@ class Config:
     web_search_context_size: str = "medium"
     memory_enabled: bool = False
     memory_max_context: int = 4_000
+    memory_max_context_items: int = 20
     memory_max_results: int = 7
     memory_autosave: bool = True
     memory_summarization: bool = True
-    memory_db_path: Path = Path("data/memory.db")
+    memory_db_path: Path = Path("/var/lib/jarvis/memory.db")
     reminders_enabled: bool = False
     reminders_db_path: Path = Path("/var/lib/jarvis/reminders.db")
     reminders_default_timezone: str = "UTC"
@@ -194,10 +195,15 @@ def load_config(environment: Mapping[str, str] | None = None) -> Config:
             values.get("MEMORY_ENABLED", "false"), "MEMORY_ENABLED"
         ),
         memory_max_context=_parse_bounded_int(
-            values.get("MEMORY_MAX_CONTEXT", "4000").strip(),
-            "MEMORY_MAX_CONTEXT",
+            values.get("MEMORY_MAX_CONTEXT_CHARS",
+                       values.get("MEMORY_MAX_CONTEXT", "4000")).strip(),
+            "MEMORY_MAX_CONTEXT_CHARS",
             500,
             20_000,
+        ),
+        memory_max_context_items=_parse_bounded_int(
+            values.get("MEMORY_MAX_CONTEXT_ITEMS", "20").strip(),
+            "MEMORY_MAX_CONTEXT_ITEMS", 1, 100,
         ),
         memory_max_results=_parse_bounded_int(
             values.get("MEMORY_MAX_RESULTS", "7").strip(),
@@ -206,15 +212,17 @@ def load_config(environment: Mapping[str, str] | None = None) -> Config:
             10,
         ),
         memory_autosave=_parse_boolean(
-            values.get("MEMORY_AUTOSAVE", "true"), "MEMORY_AUTOSAVE"
+            values.get("MEMORY_AUTO_EXTRACT_ENABLED",
+                       values.get("MEMORY_AUTOSAVE", "true")),
+            "MEMORY_AUTO_EXTRACT_ENABLED"
         ),
         memory_summarization=_parse_boolean(
             values.get("MEMORY_SUMMARIZATION", "true"),
             "MEMORY_SUMMARIZATION",
         ),
         memory_db_path=Path(
-            values.get("MEMORY_DB_PATH", "data/memory.db").strip()
-            or "data/memory.db"
+            values.get("MEMORY_DB_PATH", "/var/lib/jarvis/memory.db").strip()
+            or "/var/lib/jarvis/memory.db"
         ),
         reminders_enabled=_parse_boolean(
             values.get("REMINDERS_ENABLED", "false"), "REMINDERS_ENABLED"

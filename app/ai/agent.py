@@ -160,10 +160,11 @@ class JarvisAgent:
             instructions = JARVIS_SYSTEM_PROMPT
             if self.memory_manager is not None:
                 await self._run_sync(
-                    self.memory_manager.autosave, user_text
+                    self.memory_manager.autosave, user_text, owner_id=user_id or 0
                 )
                 memory_context = await self._run_sync(
-                    self.memory_manager.relevant_context, user_text
+                    self.memory_manager.relevant_context, user_text,
+                    owner_id=user_id or 0
                 )
                 if memory_context:
                     instructions = (
@@ -481,6 +482,12 @@ class JarvisAgent:
                         "trusted_source_message_id": source_message_id,
                     }
                 )
+            if tool_name in {
+                "remember", "forget", "update_memory", "search_memory",
+                "list_project_memory", "remember_fact", "recall_memory",
+                "forget_memory", "update_project_memory", "get_project_status",
+            }:
+                execution_arguments["trusted_owner_id"] = user_id or 0
             tool = self.tool_manager.registry.get(tool_name)
             if isinstance(tool, SSHServiceTool):
                 if ssh_context is None:

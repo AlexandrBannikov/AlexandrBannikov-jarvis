@@ -18,6 +18,10 @@ from app.handlers import (
     run_tool,
     start,
     status,
+    memory_command,
+    memory_projects_command,
+    memory_forget_command,
+    memory_status_command,
     telegram_error_handler,
     tools_command,
 )
@@ -90,6 +94,7 @@ def build_application(config: Config) -> Application:
             max_context=config.memory_max_context,
             autosave=config.memory_autosave,
             summarization=config.memory_summarization,
+            max_context_items=config.memory_max_context_items,
         )
         register_memory_tools(tool_manager.registry, memory_manager)
     application.bot_data["tool_manager"] = tool_manager
@@ -157,6 +162,10 @@ def build_application(config: Config) -> Application:
     application.add_handler(CommandHandler("status", status))
     application.add_handler(CommandHandler("tool", run_tool))
     application.add_handler(CommandHandler("tools", tools_command))
+    application.add_handler(CommandHandler("memory", memory_command))
+    application.add_handler(CommandHandler("memory_projects", memory_projects_command))
+    application.add_handler(CommandHandler("memory_forget", memory_forget_command))
+    application.add_handler(CommandHandler("memory_status", memory_status_command))
     application.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text)
     )

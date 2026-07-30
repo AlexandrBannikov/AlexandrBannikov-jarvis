@@ -70,6 +70,7 @@ class RememberTool(Tool):
         )
 
     def execute(self, **kwargs: Any) -> dict[str, Any]:
+        owner_id = int(kwargs.pop("trusted_owner_id", 0))
         record = self.manager.remember(
             memory_type=str(kwargs["memory_type"]),
             title=str(kwargs["title"]),
@@ -78,6 +79,7 @@ class RememberTool(Tool):
             project=str(kwargs["project"]),
             importance=int(kwargs["importance"]),
             source=str(kwargs["source"]),
+            owner_id=owner_id,
         )
         return {"memory": record.public_dict()}
 
@@ -101,10 +103,11 @@ class ForgetMemoryTool(Tool):
         )
 
     def execute(self, **kwargs: Any) -> dict[str, Any]:
+        owner_id = int(kwargs.pop("trusted_owner_id", 0))
         memory_id = int(kwargs["memory_id"])
         return {
             "memory_id": memory_id,
-            "forgotten": self.manager.forget(memory_id),
+            "forgotten": self.manager.forget(memory_id, owner_id=owner_id),
         }
 
 
@@ -133,12 +136,14 @@ class UpdateMemoryTool(Tool):
         )
 
     def execute(self, **kwargs: Any) -> dict[str, Any]:
+        owner_id = int(kwargs.pop("trusted_owner_id", 0))
         record = self.manager.update(
             int(kwargs["memory_id"]),
             title=str(kwargs["title"]),
             content=str(kwargs["content"]),
             tags=_tags(str(kwargs["tags"])),
             importance=int(kwargs["importance"]),
+            owner_id=owner_id,
         )
         return {"memory": record.public_dict()}
 
@@ -166,10 +171,12 @@ class SearchMemoryTool(Tool):
         )
 
     def execute(self, **kwargs: Any) -> dict[str, Any]:
+        owner_id = int(kwargs.pop("trusted_owner_id", 0))
         records = self.manager.search(
             str(kwargs["query"]),
             project=str(kwargs["project"]),
             max_results=int(kwargs["max_results"]),
+            owner_id=owner_id,
         )
         return {"memories": [record.public_dict() for record in records]}
 
@@ -196,11 +203,63 @@ class ListProjectMemoryTool(Tool):
         )
 
     def execute(self, **kwargs: Any) -> dict[str, Any]:
+        owner_id = int(kwargs.pop("trusted_owner_id", 0))
         records = self.manager.list_project(
             project=str(kwargs["project"]),
             max_results=int(kwargs["max_results"]),
+            owner_id=owner_id,
         )
         return {"memories": [record.public_dict() for record in records]}
+
+
+class RememberFactTool(RememberTool):
+    @property
+    def name(self) -> str:
+        return "remember_fact"
+
+
+class RecallMemoryTool(SearchMemoryTool):
+    @property
+    def name(self) -> str:
+        return "recall_memory"
+
+
+class ForgetMemoryOwnedTool(ForgetMemoryTool):
+    @property
+    def name(self) -> str:
+        return "forget_memory"
+
+
+class UpdateProjectMemoryTool(Tool):
+    def __init__(self, manager: MemoryManager) -> None:
+        self.manager=manager
+    @property
+    def name(self) -> str: return "update_project_memory"
+    @property
+    def description(self) -> str:
+        return "Update durable non-secret project metadata for the current owner."
+    def parameters(self) -> dict[str, Any]:
+        props={name:{"type":"string"} for name in
+               ("project_key","name","description","repository","path",
+                "server_name","status","current_milestone")}
+        return _strict_schema(props,list(props))
+    def execute(self, **kwargs: Any) -> dict[str, Any]:
+        owner=int(kwargs.pop("trusted_owner_id",0))
+        key=str(kwargs.pop("project_key"))
+        return {"project":self.manager.service.update_project(owner,key,**kwargs).public_dict()}
+
+
+class GetProjectStatusTool(Tool):
+    def __init__(self, manager: MemoryManager) -> None: self.manager=manager
+    @property
+    def name(self) -> str: return "get_project_status"
+    @property
+    def description(self) -> str: return "Read stored status for one project."
+    def parameters(self) -> dict[str, Any]:
+        return _strict_schema({"project_key":{"type":"string"}},["project_key"])
+    def execute(self, **kwargs: Any) -> dict[str, Any]:
+        owner=int(kwargs.pop("trusted_owner_id",0))
+        return self.manager.service.get_project_context(owner,str(kwargs["project_key"]))
 
 
 def register_memory_tools(
@@ -212,5 +271,10 @@ def register_memory_tools(
         UpdateMemoryTool(manager),
         SearchMemoryTool(manager),
         ListProjectMemoryTool(manager),
+        RememberFactTool(manager),
+        RecallMemoryTool(manager),
+        ForgetMemoryOwnedTool(manager),
+        UpdateProjectMemoryTool(manager),
+        GetProjectStatusTool(manager),
     ):
         registry.register(tool)

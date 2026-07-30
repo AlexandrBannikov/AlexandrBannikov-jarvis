@@ -1,0 +1,48 @@
+{
+  "projects": [
+    {
+      "project_key": "jarvis",
+      "name": "Jarvis",
+      "description": "Personal infrastructure assistant",
+      "status": "reminder system implemented; service lifecycle integrated with Telegram bot",
+      "current_milestone": "persistent memory",
+      "facts": {
+        "reminders": "Persistent reminders use SQLite.",
+        "service_lifecycle": "Service lifecycle is integrated with the Telegram bot."
+      }
+    },
+    {
+      "project_key": "crypto-bot",
+      "name": "Crypto Bot",
+      "repository": "AlexandrBannikov/crypto-bot",
+      "path": "/opt/crypto-bot",
+      "current_milestone": "walk-forward comparison of Control, Relaxed and Faster EMA variants",
+      "facts": {
+        "exchange": "Bybit",
+        "symbol": "ETHUSDT",
+        "timeframe": "1h",
+        "latest_commit": "35d31a1",
+        "latest_tests": "1012 passed",
+        "research_direction": "Walk-forward comparison of Control, Relaxed and Faster EMA variants."
+      }
+    }
+  ],
+  "memories": [
+    {
+      "scope": "user_preference",
+      "namespace": "workflow",
+      "key": "development_tool",
+      "value": "Development is performed through Codex.",
+      "summary": "Development is performed through Codex.",
+      "importance": 8
+    },
+    {
+      "scope": "user_preference",
+      "namespace": "workflow",
+      "key": "commit_push_permission",
+      "value": "Do not commit or push without explicit permission.",
+      "summary": "Do not commit or push without explicit permission.",
+      "importance": 10
+    }
+  ]
+}
