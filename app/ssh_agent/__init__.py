@@ -2,6 +2,7 @@
 
 from .config import DEFAULT_CONFIG_PATH, load_config
 from .models import ProjectConfig, SSHAgentConfig, ServerConfig
+from .policy import CommandPolicy
 from .registry import ServerRegistry
 
 __all__ = [
@@ -10,5 +11,6 @@ __all__ = [
     "SSHAgentConfig",
     "ServerConfig",
     "ServerRegistry",
+    "CommandPolicy",
     "load_config",
 ]

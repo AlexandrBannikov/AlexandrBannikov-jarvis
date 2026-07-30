@@ -12,6 +12,11 @@ class ErrorCode(StrEnum):
     SERVER_DISABLED = "SERVER_DISABLED"
     PROJECT_NOT_FOUND = "PROJECT_NOT_FOUND"
     SERVICE_NOT_ALLOWED = "SERVICE_NOT_ALLOWED"
+    OPERATION_NOT_SUPPORTED = "OPERATION_NOT_SUPPORTED"
+    OPERATION_PARAMETER_REQUIRED = "OPERATION_PARAMETER_REQUIRED"
+    OPERATION_PARAMETER_FORBIDDEN = "OPERATION_PARAMETER_FORBIDDEN"
+    INVALID_LINE_LIMIT = "INVALID_LINE_LIMIT"
+    EXECUTION_PLAN_UNSAFE = "EXECUTION_PLAN_UNSAFE"
 
 
 _MESSAGES = {
@@ -23,6 +28,11 @@ _MESSAGES = {
     ErrorCode.SERVER_DISABLED: "Сервер отключён.",
     ErrorCode.PROJECT_NOT_FOUND: "Проект не найден.",
     ErrorCode.SERVICE_NOT_ALLOWED: "Сервис не разрешён.",
+    ErrorCode.OPERATION_NOT_SUPPORTED: "Операция SSH Agent не поддерживается.",
+    ErrorCode.OPERATION_PARAMETER_REQUIRED: "Обязательный параметр операции не указан.",
+    ErrorCode.OPERATION_PARAMETER_FORBIDDEN: "Параметр не разрешён для этой операции.",
+    ErrorCode.INVALID_LINE_LIMIT: "Количество строк журнала некорректно.",
+    ErrorCode.EXECUTION_PLAN_UNSAFE: "План выполнения SSH Agent небезопасен.",
 }
 
 
@@ -56,3 +66,12 @@ class ProjectNotFoundError(SSHAgentError):
 class ServiceNotAllowedError(SSHAgentError):
     def __init__(self) -> None:
         super().__init__(ErrorCode.SERVICE_NOT_ALLOWED)
+
+
+class OperationPolicyError(SSHAgentError):
+    pass
+
+
+class ExecutionPlanError(SSHAgentError):
+    def __init__(self) -> None:
+        super().__init__(ErrorCode.EXECUTION_PLAN_UNSAFE)
