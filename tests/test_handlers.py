@@ -106,7 +106,8 @@ def test_text_handler_sends_ai_response() -> None:
     asyncio.run(handle_text(update, context))
 
     context.application.bot_data["agent"].ask.assert_awaited_once_with(
-        "Hello", user_id=123
+        "Hello", user_id=123, chat_id=456, source_message_id=None,
+        is_allowlisted=True,
     )
     update.effective_message.reply_text.assert_awaited_once_with("AI answer")
 

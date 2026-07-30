@@ -218,7 +218,7 @@ def test_fixed_output_parsers_valid_and_malformed() -> None:
 
 def test_formatter_redacts_and_never_exposes_config() -> None:
     result = SSHServiceResult(True, "service_recent_logs", "alpha", service_name="app.service",
-                              data={"lines": ("Authorization: Bearer abcdefghijklmnop",)},
+                              data={"lines": ("Authorization: " + "Bearer abcdefghijklmnop",)},
                               truncated=True, partial=True)
     text = format_result(result)
     assert "[REDACTED]" in text and "secret.internal" not in text

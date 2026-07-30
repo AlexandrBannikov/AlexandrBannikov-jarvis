@@ -28,6 +28,11 @@ from app.reminders.delivery import ReminderDelivery
 from app.reminders.tools import register_reminder_tools
 from app.health import set_reminder_health_provider
 from app.tools import create_default_tool_manager
+from app.ssh_agent.config import load_config as load_ssh_config
+from app.ssh_agent.models import SSHAgentConfig
+from app.ssh_agent.registry import ServerRegistry
+from app.ssh_agent.service import SSHService
+from app.ssh_agent.tools import register_ssh_tools
 
 logger = logging.getLogger(__name__)
 
@@ -92,6 +97,22 @@ def build_application(config: Config) -> Application:
         register_memory_tools(tool_manager.registry, memory_manager)
     application.bot_data["tool_manager"] = tool_manager
     application.bot_data["memory_manager"] = memory_manager
+    ssh_enabled = config.ssh_enabled
+    if ssh_enabled:
+        try:
+            ssh_config = load_ssh_config(config.ssh_servers_config_path)
+        except Exception as error:
+            logger.warning(
+                "SSH tools disabled due to invalid configuration: error_type=%s",
+                type(error).__name__,
+            )
+            ssh_config = SSHAgentConfig(1, {})
+            ssh_enabled = False
+    else:
+        ssh_config = SSHAgentConfig(1, {})
+    ssh_service = SSHService(ServerRegistry(ssh_config), enabled=ssh_enabled)
+    register_ssh_tools(tool_manager.registry, ssh_service)
+    application.bot_data["ssh_service"] = ssh_service
     reminder_service = None
     reminder_scheduler = None
     if config.reminders_enabled:

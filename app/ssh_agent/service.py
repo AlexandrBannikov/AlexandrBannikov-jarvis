@@ -35,6 +35,19 @@ _SAFE_MESSAGES = {
     ErrorCode.SSH_CONTEXT_INVALID: "Некорректный контекст SSH-запроса.",
     ErrorCode.SSH_RATE_LIMITED: "Слишком много запросов. Повторите позже.",
     ErrorCode.SSH_BUSY: "SSH Agent занят. Повторите позже.",
+    ErrorCode.SERVER_NOT_FOUND: "Сервер не найден в разрешённой конфигурации.",
+    ErrorCode.SERVER_DISABLED: "Сервер временно отключён.",
+    ErrorCode.PROJECT_NOT_FOUND: "Проект не найден на выбранном сервере.",
+    ErrorCode.SERVICE_NOT_ALLOWED: "Этот сервис не разрешён для проекта.",
+    ErrorCode.SSH_CONNECTION_REFUSED: "Сервер недоступен.",
+    ErrorCode.SSH_CONNECTION_TIMEOUT: "Сервер недоступен.",
+    ErrorCode.SSH_HOST_KEY_UNKNOWN: "SSH host key не подтверждён.",
+    ErrorCode.SSH_HOST_KEY_MISMATCH: "Ключ сервера изменился. Подключение заблокировано.",
+    ErrorCode.SSH_AUTHENTICATION_FAILED: "SSH-аутентификация не прошла.",
+    ErrorCode.SSH_COMMAND_TIMEOUT: "Проверка заняла слишком много времени и была остановлена.",
+    ErrorCode.SSH_REMOTE_COMMAND_FAILED: "Удалённая проверка завершилась с ошибкой.",
+    ErrorCode.SSH_OUTPUT_TRUNCATED: "Часть вывода была сокращена.",
+    ErrorCode.SSH_PROCESS_ERROR: "SSH-проверка временно недоступна.",
 }
 
 

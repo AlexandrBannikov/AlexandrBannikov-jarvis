@@ -51,6 +51,8 @@ class Config:
     reminders_delivery_enabled: bool = True
     reminders_lease_seconds: int = 120
     reminders_list_limit: int = 20
+    ssh_enabled: bool = False
+    ssh_servers_config_path: Path = Path("/etc/jarvis/servers.json")
 
 
 def _parse_boolean(value: str, name: str) -> bool:
@@ -263,6 +265,14 @@ def load_config(environment: Mapping[str, str] | None = None) -> Config:
         reminders_delivery_enabled=_parse_boolean(
             values.get("REMINDERS_DELIVERY_ENABLED", "true"),
             "REMINDERS_DELIVERY_ENABLED",
+        ),
+        ssh_enabled=_parse_boolean(
+            values.get("JARVIS_SSH_ENABLED", "false"), "JARVIS_SSH_ENABLED"
+        ),
+        ssh_servers_config_path=Path(
+            values.get(
+                "JARVIS_SSH_SERVERS_CONFIG", "/etc/jarvis/servers.json"
+            ).strip() or "/etc/jarvis/servers.json"
         ),
         reminders_lease_seconds=_parse_bounded_int(
             values.get("REMINDERS_LEASE_SECONDS", "120"),

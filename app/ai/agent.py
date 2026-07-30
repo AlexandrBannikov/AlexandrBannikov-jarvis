@@ -4,6 +4,7 @@ import asyncio
 import logging
 import re
 import time
+from datetime import datetime, timezone
 from collections.abc import Awaitable, Callable
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
@@ -30,6 +31,8 @@ from app.ai.tool_adapter import (
 from app.tools.manager import ToolManager
 from app.tools.result import ToolResult
 from app.memory.manager import MemoryManager
+from app.ssh_agent.service_models import SSHRequestContext
+from app.ssh_agent.tools import SSHServiceTool
 
 logger = logging.getLogger(__name__)
 audit_logger = logging.getLogger("jarvis.audit")
@@ -116,12 +119,16 @@ class JarvisAgent:
         user_id: int | None = None,
         chat_id: int | None = None,
         source_message_id: int | None = None,
+        is_allowlisted: bool = False,
     ) -> str:
         started_at = time.monotonic()
         rounds = 0
         success = False
         error_type = "none"
         web_search_was_used = False
+        ssh_context = self._ssh_context(
+            user_id, chat_id, source_message_id, is_allowlisted
+        )
         audit_logger.info(
             "agent_request_started user_id=%s text_length=%d "
             "web_search_enabled=%s",
@@ -242,6 +249,7 @@ class JarvisAgent:
                             user_id=user_id,
                             chat_id=chat_id,
                             source_message_id=source_message_id,
+                            ssh_context=ssh_context,
                         )
                     )
                 response = await self._create_response(
@@ -447,6 +455,7 @@ class JarvisAgent:
         user_id: int | None,
         chat_id: int | None = None,
         source_message_id: int | None = None,
+        ssh_context: SSHRequestContext | None = None,
     ) -> dict[str, str]:
         call_id = str(_item_value(call, "call_id", ""))
         tool_name = str(_item_value(call, "name", ""))
@@ -472,11 +481,24 @@ class JarvisAgent:
                         "trusted_source_message_id": source_message_id,
                     }
                 )
-            result = await self._run_sync(
-                self.tool_manager.execute,
-                tool_name,
-                **execution_arguments,
-            )
+            tool = self.tool_manager.registry.get(tool_name)
+            if isinstance(tool, SSHServiceTool):
+                if ssh_context is None:
+                    result = ToolResult(
+                        success=False, tool=tool_name, data={},
+                        message="Контекст Telegram для SSH-инструмента недоступен.",
+                        duration_ms=0, error="SSH_CONTEXT_INVALID",
+                    )
+                else:
+                    result = await tool.execute_trusted(
+                        ssh_context, execution_arguments
+                    )
+            else:
+                result = await self._run_sync(
+                    self.tool_manager.execute,
+                    tool_name,
+                    **execution_arguments,
+                )
         except ToolCallValidationError as error:
             result = ToolResult(
                 success=False,
@@ -502,3 +524,22 @@ class JarvisAgent:
             "call_id": call_id,
             "output": serialize_tool_result(result),
         }
+
+    @staticmethod
+    def _ssh_context(
+        user_id: int | None, chat_id: int | None,
+        source_message_id: int | None, is_allowlisted: bool,
+    ) -> SSHRequestContext | None:
+        if (
+            isinstance(user_id, bool) or not isinstance(user_id, int) or user_id <= 0
+            or isinstance(chat_id, bool) or not isinstance(chat_id, int) or chat_id == 0
+            or is_allowlisted is not True
+        ):
+            return None
+        suffix = source_message_id if isinstance(source_message_id, int) else 0
+        return SSHRequestContext(
+            user_id=user_id, chat_id=chat_id,
+            request_id=f"telegram-{user_id}-{chat_id}-{suffix}",
+            source_message_id=source_message_id if isinstance(source_message_id, int) else None,
+            is_allowlisted=True, requested_at=datetime.now(timezone.utc),
+        )

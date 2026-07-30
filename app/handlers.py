@@ -278,15 +278,18 @@ async def handle_text(
             _show_typing(context, update.effective_chat.id)
         )
         try:
-            if reminder_service is None:
-                response = await agent.ask(prompt, user_id=user_id)
-            else:
-                response = await agent.ask(
-                    prompt,
-                    user_id=user_id,
-                    chat_id=chat_id,
-                    source_message_id=getattr(message, "message_id", None),
-                )
+            response = await agent.ask(
+                prompt,
+                user_id=user_id,
+                chat_id=chat_id,
+                source_message_id=getattr(message, "message_id", None),
+                is_allowlisted=(
+                    user_id
+                    in context.application.bot_data[
+                        "config"
+                    ].telegram_allowed_user_ids
+                ),
+            )
         except (
             LLMConfigurationError,
             LLMTimeoutError,
