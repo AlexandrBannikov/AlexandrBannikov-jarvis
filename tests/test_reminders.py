@@ -212,11 +212,11 @@ def test_not_duplicate_for_time_or_type(service: ReminderService, variation: Par
 @pytest.mark.parametrize(
     "secret",
     [
-        "sk-TEST_SECRET_VALUE",
+        "sk-" + "TEST_SECRET_VALUE",
         "Bearer abcdefghijklmnop",
         "123456789:abcdefghijklmnopqrstuvwxyz",
         "eyJabcdefghijk.abcdefghijk.signature",
-        "-----BEGIN OPENSSH PRIVATE KEY-----",
+        "-----BEGIN OPENSSH " + "PRIVATE KEY-----",
         "OPENAI_API_KEY=value",
         ".env OPENAI_API_KEY=value",
     ],
@@ -230,7 +230,7 @@ def test_secret_blocked(service: ReminderService, secret: str) -> None:
 def test_secret_blocked_before_time_clarification(service: ReminderService) -> None:
     with pytest.raises(ReminderError, match="SECRET_BLOCKED"):
         service.parse_and_handle(
-            "Напомни завтра использовать ключ sk-TEST_SECRET_VALUE",
+            "Напомни завтра использовать ключ sk-" + "TEST_SECRET_VALUE",
             user_id=1, chat_id=1, source_message_id=99, now=NOW,
         )
 

@@ -2,5 +2,6 @@ python-telegram-bot
 openai>=2.50.0,<3
 python-dotenv
 pytest
+pytest-asyncio
 paramiko
 PyYAML

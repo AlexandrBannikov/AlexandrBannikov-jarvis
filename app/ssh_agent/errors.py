@@ -17,6 +17,18 @@ class ErrorCode(StrEnum):
     OPERATION_PARAMETER_FORBIDDEN = "OPERATION_PARAMETER_FORBIDDEN"
     INVALID_LINE_LIMIT = "INVALID_LINE_LIMIT"
     EXECUTION_PLAN_UNSAFE = "EXECUTION_PLAN_UNSAFE"
+    SSH_EXECUTABLE_NOT_FOUND = "SSH_EXECUTABLE_NOT_FOUND"
+    SSH_CONNECTION_REFUSED = "SSH_CONNECTION_REFUSED"
+    SSH_CONNECTION_TIMEOUT = "SSH_CONNECTION_TIMEOUT"
+    SSH_HOST_KEY_UNKNOWN = "SSH_HOST_KEY_UNKNOWN"
+    SSH_HOST_KEY_MISMATCH = "SSH_HOST_KEY_MISMATCH"
+    SSH_AUTHENTICATION_FAILED = "SSH_AUTHENTICATION_FAILED"
+    SSH_REMOTE_COMMAND_FAILED = "SSH_REMOTE_COMMAND_FAILED"
+    SSH_COMMAND_TIMEOUT = "SSH_COMMAND_TIMEOUT"
+    SSH_OUTPUT_TRUNCATED = "SSH_OUTPUT_TRUNCATED"
+    SSH_PROCESS_ERROR = "SSH_PROCESS_ERROR"
+    SSH_PLAN_UNSAFE = "SSH_PLAN_UNSAFE"
+    SSH_SERVER_DISABLED = "SSH_SERVER_DISABLED"
 
 
 _MESSAGES = {
@@ -33,6 +45,18 @@ _MESSAGES = {
     ErrorCode.OPERATION_PARAMETER_FORBIDDEN: "Параметр не разрешён для этой операции.",
     ErrorCode.INVALID_LINE_LIMIT: "Количество строк журнала некорректно.",
     ErrorCode.EXECUTION_PLAN_UNSAFE: "План выполнения SSH Agent небезопасен.",
+    ErrorCode.SSH_EXECUTABLE_NOT_FOUND: "Системный SSH-клиент недоступен.",
+    ErrorCode.SSH_CONNECTION_REFUSED: "SSH-соединение отклонено.",
+    ErrorCode.SSH_CONNECTION_TIMEOUT: "Истекло время установки SSH-соединения.",
+    ErrorCode.SSH_HOST_KEY_UNKNOWN: "Ключ SSH-сервера не является доверенным.",
+    ErrorCode.SSH_HOST_KEY_MISMATCH: "Ключ SSH-сервера изменился.",
+    ErrorCode.SSH_AUTHENTICATION_FAILED: "SSH-аутентификация не удалась.",
+    ErrorCode.SSH_REMOTE_COMMAND_FAILED: "Удалённая команда завершилась с ошибкой.",
+    ErrorCode.SSH_COMMAND_TIMEOUT: "Истекло время выполнения удалённой команды.",
+    ErrorCode.SSH_OUTPUT_TRUNCATED: "Вывод удалённой команды был ограничен.",
+    ErrorCode.SSH_PROCESS_ERROR: "Ошибка системного SSH-процесса.",
+    ErrorCode.SSH_PLAN_UNSAFE: "План выполнения SSH Agent небезопасен.",
+    ErrorCode.SSH_SERVER_DISABLED: "Сервер отключён.",
 }
 
 
