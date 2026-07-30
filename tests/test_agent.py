@@ -328,6 +328,22 @@ def test_unsupported_search_model_has_specific_message() -> None:
     assert answer == WEB_SEARCH_UNSUPPORTED_MESSAGE
 
 
+def test_bad_request_does_not_claim_web_search_is_unsupported() -> None:
+    answer = asyncio.run(
+        JarvisAgent(
+            FakeProvider([LLMBadRequestError()]),
+            manager(),
+            run_sync=run_immediately,
+            web_search_enabled=True,
+        ).ask("Покажи список серверов")
+    )
+
+    assert answer == (
+        "Не удалось обработать запрос из-за ошибки конфигурации инструментов."
+    )
+    assert answer != WEB_SEARCH_UNSUPPORTED_MESSAGE
+
+
 def test_search_failure_can_fall_back_for_stable_question() -> None:
     provider = FakeProvider(
         [
@@ -499,7 +515,7 @@ def test_empty_final_response_has_safe_message() -> None:
         (LLMAuthenticationError(), "Ошибка авторизации"),
         (LLMNetworkError(), "Временная ошибка OpenAI"),
         (LLMPermissionError(), "недоступна для этого проекта"),
-        (LLMBadRequestError(), "модель недоступна"),
+        (LLMBadRequestError(), "ошибки конфигурации инструментов"),
         (LLMModelUnavailableError(), "модель недоступна"),
     ],
 )

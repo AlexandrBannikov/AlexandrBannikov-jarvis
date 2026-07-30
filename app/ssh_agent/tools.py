@@ -179,7 +179,10 @@ class GetServiceRecentLogsTool(GetServiceStatusTool):
     def parameters(self) -> dict[str, Any]:
         properties = dict(super().parameters()["properties"])
         properties["lines"] = {"type": "integer", "minimum": 1, "maximum": 200}
-        return _schema(properties, ["server_alias", "project_alias", "service_name"])
+        return _schema(
+            properties,
+            ["server_alias", "project_alias", "service_name", "lines"],
+        )
 
 
 class GetProjectStatusTool(ProjectTool):

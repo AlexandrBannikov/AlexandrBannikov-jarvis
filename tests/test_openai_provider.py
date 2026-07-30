@@ -21,6 +21,7 @@ from app.ai.openai_provider import (
     OPENAI_MAX_RETRIES,
     OpenAIProvider,
     _exception_chain,
+    _is_web_search_unsupported,
 )
 from app.ai.provider import (
     LLMAuthenticationError,
@@ -248,13 +249,27 @@ def test_request_log_contains_metadata_but_not_content(
     [
         (
             BadRequestError(
-                "tool unsupported", response=sdk_response(400), body=None
+                "tool unsupported",
+                response=sdk_response(400),
+                body={
+                    "message": "The model does not support web_search.",
+                    "type": "invalid_request_error",
+                    "param": "tools",
+                    "code": "unsupported_web_search",
+                },
             ),
             LLMWebSearchUnsupportedError,
         ),
         (
             PermissionDeniedError(
-                "tool denied", response=sdk_response(403), body=None
+                "tool denied",
+                response=sdk_response(403),
+                body={
+                    "message": "The model does not support web_search.",
+                    "type": "invalid_request_error",
+                    "param": "tools",
+                    "code": "unsupported_web_search",
+                },
             ),
             LLMWebSearchUnsupportedError,
         ),
@@ -289,6 +304,50 @@ def test_web_search_errors_are_distinct(
             tools=[{"type": "web_search"}],
             tool_choice="auto",
         )
+
+
+def test_invalid_function_schema_is_not_web_search_unsupported() -> None:
+    provider = OpenAIProvider(api_key="key", model=DEFAULT_OPENAI_MODEL)
+    provider._client = Mock()
+    provider._client.responses.create.side_effect = BadRequestError(
+        "invalid schema",
+        response=sdk_response(400),
+        body={
+            "message": "Invalid schema for function 'tool'.",
+            "type": "invalid_request_error",
+            "param": "tools[0].parameters",
+            "code": "invalid_function_parameters",
+        },
+    )
+
+    with pytest.raises(LLMBadRequestError):
+        provider.create_response(
+            [],
+            tools=[
+                {"type": "function", "name": "tool"},
+                {"type": "web_search"},
+            ],
+        )
+
+
+def test_explicit_unsupported_web_search_is_classified() -> None:
+    error = BadRequestError(
+        "unsupported",
+        response=sdk_response(400),
+        body={
+            "message": "The selected model does not support web_search.",
+            "type": "invalid_request_error",
+            "param": "tools",
+            "code": "unsupported_web_search",
+        },
+    )
+    provider = OpenAIProvider(api_key="key", model=DEFAULT_OPENAI_MODEL)
+    provider._client = Mock()
+    provider._client.responses.create.side_effect = error
+
+    assert _is_web_search_unsupported(error)
+    with pytest.raises(LLMWebSearchUnsupportedError):
+        provider.create_response([], tools=[{"type": "web_search"}])
 
 
 @pytest.mark.parametrize(

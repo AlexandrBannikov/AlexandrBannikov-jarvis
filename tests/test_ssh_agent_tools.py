@@ -34,7 +34,7 @@ EXPECTED = {
     ),
     "get_service_recent_logs": (
         {"server_alias", "project_alias", "service_name", "lines"},
-        {"server_alias", "project_alias", "service_name"},
+        {"server_alias", "project_alias", "service_name", "lines"},
     ),
     "get_project_status": (
         {"server_alias", "project_alias"}, {"server_alias", "project_alias"},
