@@ -9,3 +9,13 @@ data/*
 *.db-wal
 *.db-shm
 .pytest_cache/
+/config/servers.json
+/config/known_hosts
+/servers.json
+/known_hosts
+/data/ssh/
+*.pem
+*.key
+/id_ed25519
+/id_ed25519.*
+*.sock

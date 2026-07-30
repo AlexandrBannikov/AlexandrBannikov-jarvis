@@ -48,6 +48,15 @@ _SAFE_MESSAGES = {
     ErrorCode.SSH_REMOTE_COMMAND_FAILED: "Удалённая проверка завершилась с ошибкой.",
     ErrorCode.SSH_OUTPUT_TRUNCATED: "Часть вывода была сокращена.",
     ErrorCode.SSH_PROCESS_ERROR: "SSH-проверка временно недоступна.",
+    ErrorCode.SSH_CONFIG_MISSING: "SSH-инструменты недоступны: конфигурация отсутствует.",
+    ErrorCode.SSH_CONFIG_INVALID: "SSH-инструменты недоступны: конфигурация некорректна.",
+    ErrorCode.SSH_CONFIG_PERMISSIONS_UNSAFE: "SSH-инструменты заблокированы из-за небезопасных прав конфигурации.",
+    ErrorCode.SSH_IDENTITY_FILE_MISSING: "SSH-инструменты недоступны: identity-файл отсутствует.",
+    ErrorCode.SSH_IDENTITY_FILE_UNSAFE: "SSH-инструменты заблокированы из-за небезопасных прав identity-файла.",
+    ErrorCode.SSH_KNOWN_HOSTS_MISSING: "SSH-инструменты недоступны: known_hosts отсутствует.",
+    ErrorCode.SSH_KNOWN_HOSTS_UNSAFE: "SSH-инструменты заблокированы из-за небезопасных прав known_hosts.",
+    ErrorCode.SSH_EXECUTABLE_MISSING: "SSH-инструменты недоступны: OpenSSH не найден.",
+    ErrorCode.SSH_STARTUP_VALIDATION_FAILED: "SSH-инструменты недоступны: проверка готовности не пройдена.",
 }
 
 
@@ -70,6 +79,7 @@ class SSHService:
         concurrency_limiter: ConcurrencyLimiter | None = None,
         transport: Transport = execute, metrics: SSHMetrics | None = None,
         authorizer: SSHAuthorizer | None = None,
+        availability_error: ErrorCode = ErrorCode.SSH_DISABLED,
     ) -> None:
         self._registry = registry
         self._policy = CommandPolicy(registry)
@@ -78,6 +88,7 @@ class SSHService:
         self._concurrency = concurrency_limiter or ConcurrencyLimiter()
         self._transport = transport
         self._authorizer = authorizer or ContextAllowlistAuthorizer()
+        self._availability_error = availability_error
         self.metrics = metrics or SSHMetrics()
 
     async def list_servers(self, context: SSHRequestContext) -> SSHServiceResult:
@@ -178,7 +189,7 @@ class SSHService:
         if allowed is not True:
             return ErrorCode.SSH_ACCESS_DENIED
         if not self._enabled:
-            return ErrorCode.SSH_DISABLED
+            return self._availability_error
         if not self._rate.allow(context.user_id):
             return ErrorCode.SSH_RATE_LIMITED
         return None

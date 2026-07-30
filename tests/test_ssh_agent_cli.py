@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+import os
 
 
 def write_config(tmp_path: Path) -> Path:
@@ -44,7 +45,9 @@ def write_config(tmp_path: Path) -> Path:
     return path
 
 
-def run_cli(path: Path, *args: str) -> subprocess.CompletedProcess[str]:
+def run_cli(path: Path, *args: str, enabled: bool = False) -> subprocess.CompletedProcess[str]:
+    environment = dict(os.environ)
+    environment["JARVIS_SSH_ENABLED"] = "true" if enabled else "false"
     return subprocess.run(
         [
             sys.executable,
@@ -57,6 +60,7 @@ def run_cli(path: Path, *args: str) -> subprocess.CompletedProcess[str]:
         check=False,
         capture_output=True,
         text=True,
+        env=environment,
     )
 
 
@@ -96,3 +100,30 @@ def test_list_projects_including_disabled_server(tmp_path: Path) -> None:
     assert "Статус: отключён" in disabled.stdout
     assert "worker.timer" in disabled.stdout
     assert "/another/private/path" not in disabled.stdout
+
+
+def test_readiness_disabled_is_distinct_and_successful(tmp_path: Path) -> None:
+    result = run_cli(tmp_path / "missing.json", "readiness")
+    assert result.returncode == 0
+    assert "SSH Agent: не готов" in result.stdout
+    assert "SSH_DISABLED" in result.stdout
+    assert str(tmp_path) not in result.stdout
+
+
+def test_readiness_degraded_has_nonzero_exit_and_no_path(tmp_path: Path) -> None:
+    path = tmp_path / "missing.json"
+    result = run_cli(path, "validate-runtime", enabled=True)
+    assert result.returncode != 0
+    assert "SSH_CONFIG_MISSING" in result.stdout
+    assert str(path) not in result.stdout
+    assert "Traceback" not in result.stderr
+
+
+def test_health_output_is_safe_json(tmp_path: Path) -> None:
+    path = tmp_path / "missing.json"
+    result = run_cli(path, "health", enabled=True)
+    payload = json.loads(result.stdout)
+    assert result.returncode != 0
+    assert payload["ssh_ready"] is False
+    assert payload["ssh_readiness_code"] == "SSH_CONFIG_MISSING"
+    assert str(path) not in result.stdout

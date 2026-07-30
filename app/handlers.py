@@ -32,8 +32,7 @@ HELP_MESSAGE = (
     "/health — проверить готовность Jarvis\n"
     "/status — показать состояние системы\n"
     "/tool system_info — локальная диагностика\n"
-    "/tool remote_system_info <host> — удалённая диагностика\n"
-    "/tool remote_service_status <host> <service> — статус сервиса\n"
+    "Проверки удалённых серверов выполняются только через утверждённые SSH tools.\n"
     "/tools — показать безопасные инструменты"
 )
 PROCESS_STARTED_AT = time.monotonic()
@@ -182,21 +181,10 @@ async def run_tool(
     if arguments == ["system_info"]:
         tool_name = "system_info"
         parameters = {}
-    elif len(arguments) == 2 and arguments[0] == "remote_system_info":
-        tool_name = arguments[0]
-        parameters = {"host_alias": arguments[1]}
-    elif len(arguments) == 3 and arguments[0] == "remote_service_status":
-        tool_name = arguments[0]
-        parameters = {
-            "host_alias": arguments[1],
-            "service_name": arguments[2],
-        }
     else:
         await message.reply_text(
-            "Использование:\n"
-            "/tool system_info\n"
-            "/tool remote_system_info <host>\n"
-            "/tool remote_service_status <host> <service>"
+            "Использование:\n/tool system_info\n"
+            "Удалённые проверки запрашивайте обычным сообщением."
         )
         return
 

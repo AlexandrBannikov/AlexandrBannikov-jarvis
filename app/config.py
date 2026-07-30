@@ -271,7 +271,7 @@ def load_config(environment: Mapping[str, str] | None = None) -> Config:
         ),
         ssh_servers_config_path=Path(
             values.get(
-                "JARVIS_SSH_SERVERS_CONFIG", "/etc/jarvis/servers.json"
+                "JARVIS_SERVERS_CONFIG", "/etc/jarvis/servers.json"
             ).strip() or "/etc/jarvis/servers.json"
         ),
         reminders_lease_seconds=_parse_bounded_int(

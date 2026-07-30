@@ -2,12 +2,12 @@
   "version": 1,
   "servers": {
     "jarvis": {
-      "host": "127.0.0.1",
+      "host": "JARVIS_SERVER_PLACEHOLDER",
       "port": 22,
       "user": "jarvis-ops",
-      "identity_file": "/etc/jarvis/ssh/jarvis_ops_ed25519",
-      "host_key_alias": "jarvis-local",
-      "enabled": true,
+      "identity_file": "/etc/jarvis/ssh/example_jarvis_ops_ed25519",
+      "host_key_alias": "jarvis-example",
+      "enabled": false,
       "projects": {
         "jarvis": {
           "path": "/opt/jarvis",

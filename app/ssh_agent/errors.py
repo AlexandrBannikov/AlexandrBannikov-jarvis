@@ -35,6 +35,16 @@ class ErrorCode(StrEnum):
     SSH_RATE_LIMITED = "SSH_RATE_LIMITED"
     SSH_BUSY = "SSH_BUSY"
     SSH_PARSE_ERROR = "SSH_PARSE_ERROR"
+    SSH_READY = "SSH_READY"
+    SSH_CONFIG_MISSING = "SSH_CONFIG_MISSING"
+    SSH_CONFIG_INVALID = "SSH_CONFIG_INVALID"
+    SSH_CONFIG_PERMISSIONS_UNSAFE = "SSH_CONFIG_PERMISSIONS_UNSAFE"
+    SSH_IDENTITY_FILE_MISSING = "SSH_IDENTITY_FILE_MISSING"
+    SSH_IDENTITY_FILE_UNSAFE = "SSH_IDENTITY_FILE_UNSAFE"
+    SSH_KNOWN_HOSTS_MISSING = "SSH_KNOWN_HOSTS_MISSING"
+    SSH_KNOWN_HOSTS_UNSAFE = "SSH_KNOWN_HOSTS_UNSAFE"
+    SSH_EXECUTABLE_MISSING = "SSH_EXECUTABLE_MISSING"
+    SSH_STARTUP_VALIDATION_FAILED = "SSH_STARTUP_VALIDATION_FAILED"
 
 
 _MESSAGES = {
@@ -69,6 +79,16 @@ _MESSAGES = {
     ErrorCode.SSH_RATE_LIMITED: "Слишком много запросов к SSH Agent. Повторите позже.",
     ErrorCode.SSH_BUSY: "SSH Agent занят. Повторите позже.",
     ErrorCode.SSH_PARSE_ERROR: "Ответ сервера получен, но не распознан полностью.",
+    ErrorCode.SSH_READY: "SSH Agent готов.",
+    ErrorCode.SSH_CONFIG_MISSING: "Конфигурация SSH Agent отсутствует.",
+    ErrorCode.SSH_CONFIG_INVALID: "Конфигурация SSH Agent некорректна.",
+    ErrorCode.SSH_CONFIG_PERMISSIONS_UNSAFE: "Права конфигурации SSH Agent небезопасны.",
+    ErrorCode.SSH_IDENTITY_FILE_MISSING: "Файл SSH identity отсутствует.",
+    ErrorCode.SSH_IDENTITY_FILE_UNSAFE: "Права SSH identity небезопасны.",
+    ErrorCode.SSH_KNOWN_HOSTS_MISSING: "Файл SSH known_hosts отсутствует.",
+    ErrorCode.SSH_KNOWN_HOSTS_UNSAFE: "Права SSH known_hosts небезопасны.",
+    ErrorCode.SSH_EXECUTABLE_MISSING: "Системный OpenSSH недоступен.",
+    ErrorCode.SSH_STARTUP_VALIDATION_FAILED: "Проверка готовности SSH Agent не пройдена.",
 }
 
 

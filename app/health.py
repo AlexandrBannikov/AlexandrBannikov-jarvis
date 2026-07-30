@@ -10,6 +10,7 @@ PROCESS_STARTED_AT = time.monotonic()
 _REMINDER_PROVIDER = None
 _REMINDER_STORAGE = None
 _REMINDERS_ENABLED = False
+_SSH_DEPENDENCIES = None
 
 
 def set_reminder_health_provider(provider, *, enabled: bool, storage=None) -> None:
@@ -17,6 +18,11 @@ def set_reminder_health_provider(provider, *, enabled: bool, storage=None) -> No
     _REMINDER_PROVIDER = provider
     _REMINDER_STORAGE = storage
     _REMINDERS_ENABLED = enabled
+
+
+def set_ssh_health_provider(dependencies) -> None:
+    global _SSH_DEPENDENCIES
+    _SSH_DEPENDENCIES = dependencies
 
 
 def health_payload() -> dict[str, object]:
@@ -33,6 +39,20 @@ def health_payload() -> dict[str, object]:
         "last_scheduler_tick": None,
         "last_successful_delivery": None,
         "last_scheduler_error_code": None,
+        "ssh_enabled": False,
+        "ssh_ready": False,
+        "ssh_configuration_ok": False,
+        "ssh_known_hosts_ok": False,
+        "ssh_key_permissions_ok": False,
+        "ssh_executable_ok": False,
+        "ssh_registered_servers_count": 0,
+        "ssh_enabled_servers_count": 0,
+        "ssh_active_requests": 0,
+        "ssh_total_requests": 0,
+        "ssh_total_failures": 0,
+        "ssh_last_success_at": None,
+        "ssh_last_error_code": None,
+        "ssh_readiness_code": "SSH_DISABLED",
     }
     if _REMINDERS_ENABLED and _REMINDER_STORAGE is not None:
         try:
@@ -59,6 +79,33 @@ def health_payload() -> dict[str, object]:
         except Exception:
             payload["reminder_database_ok"] = False
             payload["last_scheduler_error_code"] = "HEALTH_DATABASE_ERROR"
+    if _SSH_DEPENDENCIES is not None:
+        readiness = _SSH_DEPENDENCIES.readiness
+        metrics = _SSH_DEPENDENCIES.metrics
+        payload.update(
+            {
+                "ssh_enabled": readiness.enabled,
+                "ssh_ready": readiness.ready,
+                "ssh_configuration_ok": readiness.configuration_ok,
+                "ssh_known_hosts_ok": readiness.known_hosts_ok,
+                "ssh_key_permissions_ok": readiness.key_permissions_ok,
+                "ssh_executable_ok": readiness.executable_ok,
+                "ssh_registered_servers_count": readiness.registered_servers_count,
+                "ssh_enabled_servers_count": readiness.enabled_servers_count,
+                "ssh_active_requests": metrics.active_requests,
+                "ssh_total_requests": metrics.total_requests,
+                "ssh_total_failures": metrics.total_failures,
+                "ssh_last_success_at": (
+                    metrics.last_success_at.isoformat()
+                    if metrics.last_success_at else None
+                ),
+                "ssh_last_error_code": (
+                    metrics.last_error_code.value
+                    if metrics.last_error_code else None
+                ),
+                "ssh_readiness_code": readiness.code.value,
+            }
+        )
     return payload
 
 

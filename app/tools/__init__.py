@@ -12,13 +12,16 @@ from app.tools.remote_system_info import RemoteSystemInfoTool
 
 def create_default_tool_manager(
     hosts_config_path: str | None = None,
+    *,
+    include_legacy_remote: bool = True,
 ) -> ToolManager:
-    """Create a manager containing Jarvis built-in tools."""
+    """Create built-ins; production disables legacy pre-SSH-Agent tools."""
     registry = ToolRegistry()
     registry.register(SystemInfoTool())
-    hosts = load_hosts_config(hosts_config_path or DEFAULT_HOSTS_CONFIG)
-    registry.register(RemoteSystemInfoTool(hosts))
-    registry.register(RemoteServiceStatusTool(hosts))
+    if include_legacy_remote:
+        hosts = load_hosts_config(hosts_config_path or DEFAULT_HOSTS_CONFIG)
+        registry.register(RemoteSystemInfoTool(hosts))
+        registry.register(RemoteServiceStatusTool(hosts))
     return ToolManager(registry)
 
 

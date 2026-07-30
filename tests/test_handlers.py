@@ -315,37 +315,27 @@ def test_run_tool_command_requires_name() -> None:
     asyncio.run(run_tool(update, context))
 
     update.effective_message.reply_text.assert_awaited_once_with(
-        "Использование:\n"
-        "/tool system_info\n"
-        "/tool remote_system_info <host>\n"
-        "/tool remote_service_status <host> <service>"
+        "Использование:\n/tool system_info\n"
+        "Удалённые проверки запрашивайте обычным сообщением."
     )
 
 
 @patch("app.handlers.asyncio.to_thread", new_callable=AsyncMock)
-def test_run_remote_service_tool_passes_only_validated_arguments(
+def test_legacy_remote_tool_command_is_isolated(
     to_thread: AsyncMock,
 ) -> None:
     from app.handlers import run_tool
-    from app.tools.result import ToolResult
-
     update = make_update()
     manager = Mock()
     context = make_context()
     context.args = ["remote_service_status", "crypto", "safe.service"]
     context.application.bot_data["tool_manager"] = manager
-    to_thread.return_value = ToolResult(
-        True, "remote_service_status", {}, "ok", 1, None
-    )
-
     asyncio.run(run_tool(update, context))
 
-    to_thread.assert_awaited_once_with(
-        manager.execute,
-        "remote_service_status",
-        host_alias="crypto",
-        service_name="safe.service",
-        initiator_user_id=123,
+    to_thread.assert_not_awaited()
+    update.effective_message.reply_text.assert_awaited_once_with(
+        "Использование:\n/tool system_info\n"
+        "Удалённые проверки запрашивайте обычным сообщением."
     )
 
 

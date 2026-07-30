@@ -1,11 +1,15 @@
 """Read-only diagnostics for SSH agent configuration."""
 
 import argparse
+import json
+import os
 from pathlib import Path
 
 from .config import load_config
 from .errors import SSHAgentError
 from .registry import ServerRegistry
+from .bootstrap import build_ssh_dependencies
+from .service import ssh_enabled_from_environment
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -13,6 +17,9 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--config", type=Path, help="Путь к конфигурации для диагностики")
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("validate-config")
+    subparsers.add_parser("readiness")
+    subparsers.add_parser("validate-runtime")
+    subparsers.add_parser("health")
     subparsers.add_parser("list-servers")
     projects = subparsers.add_parser("list-projects")
     projects.add_argument("server_alias")
@@ -21,6 +28,42 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    if args.command in {"readiness", "validate-runtime", "health"}:
+        dependencies = build_ssh_dependencies(
+            enabled=ssh_enabled_from_environment(os.environ),
+            config_path=args.config or Path(
+                os.environ.get(
+                    "JARVIS_SERVERS_CONFIG", "/etc/jarvis/servers.json"
+                )
+            ),
+        )
+        readiness = dependencies.readiness
+        if args.command == "health":
+            payload = {
+                "ssh_enabled": readiness.enabled,
+                "ssh_ready": readiness.ready,
+                "ssh_readiness_code": readiness.code.value,
+                "ssh_configuration_ok": readiness.configuration_ok,
+                "ssh_known_hosts_ok": readiness.known_hosts_ok,
+                "ssh_key_permissions_ok": readiness.key_permissions_ok,
+                "ssh_executable_ok": readiness.executable_ok,
+                "ssh_registered_servers_count": readiness.registered_servers_count,
+                "ssh_enabled_servers_count": readiness.enabled_servers_count,
+            }
+            print(json.dumps(payload, ensure_ascii=False))
+        else:
+            print(f"SSH Agent: {'готов' if readiness.ready else 'не готов'}")
+            print(f"Причина: {readiness.code.value}")
+            print(
+                "Конфигурация: "
+                + ("корректна" if readiness.configuration_ok else "не готова")
+            )
+            print(f"Серверов: {readiness.registered_servers_count}")
+            print(f"Активных: {readiness.enabled_servers_count}")
+            print(f"OpenSSH: {'найден' if readiness.executable_ok else 'не найден'}")
+            print(f"Ключи: {'проверены' if readiness.key_permissions_ok else 'не готовы'}")
+            print(f"known_hosts: {'готов' if readiness.known_hosts_ok else 'не готов'}")
+        return 0 if readiness.ready or not readiness.enabled else 1
     try:
         config = load_config(args.config)
         registry = ServerRegistry(config)
