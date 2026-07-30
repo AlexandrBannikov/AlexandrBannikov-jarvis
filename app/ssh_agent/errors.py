@@ -29,6 +29,12 @@ class ErrorCode(StrEnum):
     SSH_PROCESS_ERROR = "SSH_PROCESS_ERROR"
     SSH_PLAN_UNSAFE = "SSH_PLAN_UNSAFE"
     SSH_SERVER_DISABLED = "SSH_SERVER_DISABLED"
+    SSH_DISABLED = "SSH_DISABLED"
+    SSH_ACCESS_DENIED = "SSH_ACCESS_DENIED"
+    SSH_CONTEXT_INVALID = "SSH_CONTEXT_INVALID"
+    SSH_RATE_LIMITED = "SSH_RATE_LIMITED"
+    SSH_BUSY = "SSH_BUSY"
+    SSH_PARSE_ERROR = "SSH_PARSE_ERROR"
 
 
 _MESSAGES = {
@@ -57,6 +63,12 @@ _MESSAGES = {
     ErrorCode.SSH_PROCESS_ERROR: "Ошибка системного SSH-процесса.",
     ErrorCode.SSH_PLAN_UNSAFE: "План выполнения SSH Agent небезопасен.",
     ErrorCode.SSH_SERVER_DISABLED: "Сервер отключён.",
+    ErrorCode.SSH_DISABLED: "SSH Agent отключён.",
+    ErrorCode.SSH_ACCESS_DENIED: "Доступ к SSH Agent запрещён.",
+    ErrorCode.SSH_CONTEXT_INVALID: "Контекст запроса SSH Agent некорректен.",
+    ErrorCode.SSH_RATE_LIMITED: "Слишком много запросов к SSH Agent. Повторите позже.",
+    ErrorCode.SSH_BUSY: "SSH Agent занят. Повторите позже.",
+    ErrorCode.SSH_PARSE_ERROR: "Ответ сервера получен, но не распознан полностью.",
 }
 
 
