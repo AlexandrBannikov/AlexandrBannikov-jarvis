@@ -28,6 +28,10 @@ EXPECTED = {
     "get_server_disk_usage": ({"server_alias"}, {"server_alias"}),
     "get_server_memory_usage": ({"server_alias"}, {"server_alias"}),
     "get_server_uptime": ({"server_alias"}, {"server_alias"}),
+    "get_top_processes": (
+        {"server_alias", "sort_by", "limit"},
+        {"server_alias", "sort_by", "limit"},
+    ),
     "get_service_status": (
         {"server_alias", "project_alias", "service_name"},
         {"server_alias", "project_alias", "service_name"},
@@ -101,6 +105,13 @@ def test_exact_strict_schemas_and_no_identity_or_infrastructure_fields() -> None
         assert not (set(schema["properties"]) & FORBIDDEN)
     lines = registry.get("get_service_recent_logs").parameters()["properties"]["lines"]
     assert lines == {"type": "integer", "minimum": 1, "maximum": 200}
+    processes = registry.get("get_top_processes").parameters()["properties"]
+    assert processes["sort_by"] == {
+        "type": "string", "enum": ["cpu", "memory"],
+    }
+    assert processes["limit"] == {
+        "type": "integer", "minimum": 1, "maximum": 30,
+    }
 
 
 @pytest.mark.parametrize("field", ["user_id", "chat_id", "is_allowlisted", "command", "argv"])
@@ -125,6 +136,8 @@ def test_model_controlled_context_and_generic_arguments_rejected(field: str) -> 
         ("get_server_disk_usage", {"server_alias": "alpha"}, "get_disk_usage"),
         ("get_server_memory_usage", {"server_alias": "alpha"}, "get_memory_usage"),
         ("get_server_uptime", {"server_alias": "alpha"}, "get_uptime"),
+        ("get_top_processes", {"server_alias": "alpha", "sort_by": "cpu",
+                               "limit": 5}, "get_top_processes"),
         ("get_service_status", {"server_alias": "alpha", "project_alias": "app",
                                 "service_name": "app.service"}, "get_service_status"),
         ("get_service_recent_logs", {"server_alias": "alpha", "project_alias": "app",
@@ -269,3 +282,27 @@ def test_agent_prompt_prioritizes_tools_and_rejects_write_or_shell_requests() ->
     assert "не угадывай alias" in prompt
     assert "restart" in prompt and "произвольные команды отклоняй" in prompt
     assert "не утверждай" in prompt and "успешного результата tool" in prompt
+    assert "get_top_processes" in prompt
+    assert "sort_by=cpu" in prompt and "sort_by=memory" in prompt
+    assert "не упоминай пользователю schemas" in prompt
+    assert "просмотр процессов пока недоступен" in prompt
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        {"server_alias": "alpha", "sort_by": "disk", "limit": 5},
+        {"server_alias": "alpha", "sort_by": "cpu", "limit": 0},
+        {"server_alias": "alpha", "sort_by": "memory", "limit": 31},
+        {"server_alias": "alpha", "sort_by": "cpu", "limit": True},
+        {"server_alias": "alpha", "sort_by": "cpu", "limit": 5,
+         "command": "id"},
+    ],
+)
+def test_top_process_arguments_are_strictly_validated(
+    arguments: dict[str, object],
+) -> None:
+    with pytest.raises(ToolCallValidationError):
+        ToolAdapter(tools()).parse_and_validate(
+            "get_top_processes", json.dumps(arguments)
+        )

@@ -16,6 +16,13 @@ def _size(value: object) -> str:
     return "0 Б"
 
 
+def _percent(value: object) -> str:
+    try:
+        return f"{float(value):.1f}".replace(".", ",")
+    except (TypeError, ValueError):
+        return "?"
+
+
 def format_result(result: SSHServiceResult) -> str:
     if not result.success and not result.partial:
         return result.message or "Не удалось выполнить безопасный SSH-запрос."
@@ -29,6 +36,21 @@ def format_result(result: SSHServiceResult) -> str:
         text = f"Uptime: {data.get('readable', 'неизвестно')}"
     elif op == "load_average":
         text = f"Load average: {data.get('load_1', '?')} / {data.get('load_5', '?')} / {data.get('load_15', '?')}"
+    elif op == "top_processes":
+        sort_label = "CPU" if data.get("sort_by") == "cpu" else "памяти"
+        processes = data.get("processes", ())
+        lines = [
+            f"На сервере {result.server_alias} больше всего используют {sort_label}:"
+        ]
+        lines.extend(
+            f"{index}. {item.get('command', 'неизвестно')} — "
+            f"{_percent(item.get('cpu_percent'))}% CPU, "
+            f"{_percent(item.get('memory_percent'))}% памяти"
+            for index, item in enumerate(processes, start=1)
+        )
+        if not processes:
+            lines.append("Активные процессы не найдены.")
+        text = "\n".join(lines)
     elif op == "service_status":
         text = (
             f"Сервис: {result.service_name}\n\n"

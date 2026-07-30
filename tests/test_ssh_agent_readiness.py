@@ -11,7 +11,7 @@ from app.ssh_agent.errors import ErrorCode
 from app.ssh_agent.metrics import SSHMetrics
 from app.ssh_agent.readiness import SSHReadiness
 from app.ssh_agent.service_models import SSHRequestContext
-from app.ssh_agent.tools import SSHServiceTool
+from app.ssh_agent.tools import SSHServiceTool, SSH_TOOL_NAMES
 from app.tools.registry import ToolRegistry
 
 
@@ -69,7 +69,7 @@ def test_disabled_needs_no_config_and_registers_safe_tools(tmp_path: Path) -> No
     )
     assert dependencies.readiness.code is ErrorCode.SSH_DISABLED
     assert not dependencies.readiness.ready
-    assert len(registry.list_tools()) == 11
+    assert {tool.name for tool in registry.list_tools()} == SSH_TOOL_NAMES
     assert all(isinstance(tool, SSHServiceTool) for tool in registry.list_tools())
 
 

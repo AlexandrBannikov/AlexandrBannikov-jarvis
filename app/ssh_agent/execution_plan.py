@@ -13,6 +13,7 @@ ALLOWED_EXECUTABLES = frozenset(
         "/bin/df",
         "/usr/bin/git",
         "/usr/bin/journalctl",
+        "/usr/bin/ps",
         "/usr/bin/systemctl",
     }
 )
@@ -27,6 +28,7 @@ ALLOWED_PLAN_OPERATIONS = frozenset(
         "service_recent_logs",
         "project_git_status",
         "project_last_commit",
+        "top_processes",
     }
 )
 MAX_ARGV_COUNT = 32
@@ -172,6 +174,16 @@ def validate_execution_plan(
         if not isinstance(unit, str) or unit not in trusted_services:
             raise _unsafe()
         if unit not in plan.argv:
+            raise _unsafe()
+    if plan.operation == "top_processes":
+        sort_by = plan.metadata.get("sort_by")
+        limit = plan.metadata.get("limit")
+        if (
+            sort_by not in {"cpu", "memory"}
+            or isinstance(limit, bool)
+            or not isinstance(limit, int)
+            or not 1 <= limit <= 30
+        ):
             raise _unsafe()
 
 

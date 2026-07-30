@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import math
 
 
 def parse_disk(text: str) -> dict[str, object]:
@@ -79,6 +80,59 @@ def parse_last_commit(text: str) -> dict[str, object]:
 def parse_logs(text: str, max_chars: int = 32_000) -> dict[str, object]:
     bounded = text[:max_chars]
     return {"lines": tuple(bounded.splitlines()), "bounded": len(text) > max_chars}
+
+
+def parse_processes(text: str, limit: int) -> dict[str, object]:
+    if (
+        isinstance(limit, bool)
+        or not isinstance(limit, int)
+        or not 1 <= limit <= 30
+    ):
+        raise ValueError
+    processes: list[dict[str, object]] = []
+    elapsed_pattern = re.compile(r"(?:\d+-)?(?:\d{2}:)?\d{2}:\d{2}\Z")
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        fields = line.split(maxsplit=5)
+        if len(fields) != 6:
+            raise ValueError
+        pid_text, user, cpu_text, memory_text, elapsed, command = fields
+        pid = int(pid_text)
+        cpu = float(cpu_text)
+        memory = float(memory_text)
+        if (
+            pid <= 0
+            or not user
+            or len(user) > 64
+            or not math.isfinite(cpu)
+            or not math.isfinite(memory)
+            or cpu < 0
+            or memory < 0
+            or elapsed_pattern.fullmatch(elapsed) is None
+            or not command
+            or len(command) > 64
+            or "/" in command
+            or any(
+                ord(character) < 32 or ord(character) == 127
+                for value in (user, command)
+                for character in value
+            )
+        ):
+            raise ValueError
+        processes.append(
+            {
+                "pid": pid,
+                "user": user,
+                "cpu_percent": cpu,
+                "memory_percent": memory,
+                "elapsed": elapsed,
+                "command": command,
+            }
+        )
+        if len(processes) >= limit:
+            break
+    return {"count": len(processes), "processes": tuple(processes)}
 
 
 PARSERS = {

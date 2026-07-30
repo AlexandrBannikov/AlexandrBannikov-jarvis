@@ -69,6 +69,12 @@ class SSHServiceTool(Tool):
             if name == "lines":
                 if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 200:
                     raise ValueError("invalid line limit")
+            elif name == "limit":
+                if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 30:
+                    raise ValueError("invalid process limit")
+            elif name == "sort_by":
+                if value not in {"cpu", "memory"}:
+                    raise ValueError("invalid process sort")
             elif (
                 not isinstance(value, str)
                 or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.@:-]{0,127}", value) is None
@@ -157,6 +163,23 @@ class GetServerUptimeTool(ServerTool):
     service_method = "get_uptime"
 
 
+class GetTopProcessesTool(SSHServiceTool):
+    name = "get_top_processes"
+    description = (
+        "List a bounded set of current processes using the most CPU or memory "
+        "on one configured server. Returns comm only, never command arguments."
+    )
+    service_method = "get_top_processes"
+
+    def parameters(self) -> dict[str, Any]:
+        properties = {
+            "server_alias": {"type": "string"},
+            "sort_by": {"type": "string", "enum": ["cpu", "memory"]},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 30},
+        }
+        return _schema(properties, list(properties))
+
+
 class GetServiceStatusTool(SSHServiceTool):
     name = "get_service_status"
     description = "Get read-only status of one allowlisted service in a configured project."
@@ -206,6 +229,7 @@ class GetProjectSummaryTool(ProjectTool):
 SSH_TOOL_TYPES = (
     ListSSHServersTool, ListServerProjectsTool, GetServerSummaryTool,
     GetServerDiskUsageTool, GetServerMemoryUsageTool, GetServerUptimeTool,
+    GetTopProcessesTool,
     GetServiceStatusTool, GetServiceRecentLogsTool, GetProjectStatusTool,
     GetProjectLastCommitTool, GetProjectSummaryTool,
 )
