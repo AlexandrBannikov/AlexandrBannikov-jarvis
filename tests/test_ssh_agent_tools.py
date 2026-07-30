@@ -1,7 +1,10 @@
 import json
+from dataclasses import dataclass
 from datetime import datetime, timezone
+from enum import Enum
 from inspect import getsource
-from types import SimpleNamespace
+from pathlib import Path
+from types import MappingProxyType, SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -12,7 +15,7 @@ from app.ai.tool_adapter import ToolAdapter, ToolCallValidationError
 from app.ssh_agent.errors import ErrorCode
 from app.ssh_agent.service_models import SSHRequestContext, SSHServiceResult
 from app.ssh_agent.tools import (
-    SSH_TOOL_NAMES, SSH_TOOL_TYPES, SSHServiceTool, register_ssh_tools,
+    SSH_TOOL_NAMES, SSH_TOOL_TYPES, SSHServiceTool, _safe_value, register_ssh_tools,
 )
 from app.tools.manager import ToolManager
 from app.tools.registry import ToolRegistry
@@ -184,6 +187,70 @@ async def test_safe_output_redacts_and_omits_transport_internals() -> None:
     for forbidden in ("secret.internal", "jarvis-ops", "/keys/", "known_hosts", "argv", "stderr"):
         assert forbidden not in encoded
     assert result.data["truncated"] is True and result.data["partial"] is True
+
+
+@pytest.mark.asyncio
+async def test_composite_summary_serializes_mappingproxy_without_mutation() -> None:
+    child_data = MappingProxyType({
+        "nested": MappingProxyType({"safe": "ok"}),
+        "items": ("one", "two"),
+    })
+    child = SSHServiceResult(
+        True, "uptime", "alpha", data=child_data,
+    )
+    composite_data = {"results": (child,)}
+    service = FakeService()
+    service.get_server_summary = AsyncMock(return_value=SSHServiceResult(
+        True, "server_summary", "alpha", data=composite_data,
+    ))
+
+    result = await tools(service).get("get_server_summary").execute_trusted(
+        trusted(), {"server_alias": "alpha"},
+    )
+
+    serialized_child = result.data["data"]["results"][0]
+    assert result.success
+    assert serialized_child["data"] == {
+        "nested": {"safe": "ok"},
+        "items": ["one", "two"],
+    }
+    assert child.data is not child_data
+    assert isinstance(child.data, MappingProxyType)
+    assert child.data["nested"] is child_data["nested"]
+    assert composite_data["results"] == (child,)
+
+
+def test_safe_value_handles_nested_supported_types_without_mutation() -> None:
+    class Status(Enum):
+        READY = "ready"
+
+    @dataclass(frozen=True)
+    class Payload:
+        path: Path
+        status: Status
+        values: frozenset[int]
+
+    nested = MappingProxyType({
+        "payload": Payload(Path("/opt/safe"), Status.READY, frozenset({1, 2})),
+        "mapping": MappingProxyType({"tuple": ("safe",)}),
+    })
+
+    serialized = _safe_value(nested)
+
+    assert serialized["payload"]["path"] == "/opt/safe"
+    assert serialized["payload"]["status"] == "ready"
+    assert set(serialized["payload"]["values"]) == {1, 2}
+    assert serialized["mapping"] == {"tuple": ["safe"]}
+    assert isinstance(nested["mapping"], MappingProxyType)
+    assert nested["mapping"]["tuple"] == ("safe",)
+
+
+def test_safe_value_does_not_render_unsupported_objects() -> None:
+    class SecretBearing:
+        def __str__(self) -> str:
+            return "Bearer should-never-be-rendered"
+
+    assert _safe_value(SecretBearing()) == "[UNSUPPORTED]"
 
 
 def test_adapter_has_no_transport_plan_or_generic_dispatch() -> None:
