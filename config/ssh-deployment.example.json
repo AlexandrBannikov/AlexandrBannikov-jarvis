@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "local": {
+    "service_user": "jarvis",
+    "service_group": "jarvis",
+    "jarvis_config_dir": "/etc/jarvis",
+    "ssh_config_dir": "/etc/jarvis/ssh",
+    "servers_config_path": "/etc/jarvis/servers.json",
+    "known_hosts_path": "/etc/jarvis/ssh/known_hosts",
+    "environment_file_path": "/etc/jarvis/jarvis.env"
+  },
+  "servers": [
+    {
+      "alias": "example",
+      "display_name": "Example disabled server",
+      "host_placeholder": "SERVER_ADDRESS_PLACEHOLDER",
+      "port": 22,
+      "remote_user": "jarvis-ops",
+      "identity_name": "example_ops_ed25519",
+      "enabled": false,
+      "projects": [
+        {
+          "alias": "example-app",
+          "display_name": "Example application",
+          "remote_path": "/opt/example-app",
+          "allowed_services": [
+            "example-app.service"
+          ]
+        }
+      ]
+    }
+  ]
+}
