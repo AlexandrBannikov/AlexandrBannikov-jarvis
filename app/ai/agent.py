@@ -491,7 +491,8 @@ class JarvisAgent:
             if tool_name in {
                 "remember", "forget", "update_memory", "search_memory",
                 "list_project_memory", "remember_fact", "recall_memory",
-                "forget_memory", "update_project_memory", "get_project_status",
+                "forget_memory", "update_project_memory",
+                "get_project_memory_status",
             }:
                 execution_arguments["trusted_owner_id"] = user_id or 0
             tool = self.tool_manager.registry.get(tool_name)

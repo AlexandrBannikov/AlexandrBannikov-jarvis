@@ -252,7 +252,7 @@ class UpdateProjectMemoryTool(Tool):
 class GetProjectStatusTool(Tool):
     def __init__(self, manager: MemoryManager) -> None: self.manager=manager
     @property
-    def name(self) -> str: return "get_project_status"
+    def name(self) -> str: return "get_project_memory_status"
     @property
     def description(self) -> str: return "Read stored status for one project."
     def parameters(self) -> dict[str, Any]:

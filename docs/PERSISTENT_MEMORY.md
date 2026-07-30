@@ -58,7 +58,7 @@ The supported settings are `MEMORY_ENABLED`, `MEMORY_DB_PATH` (default
 
 The agent has separate write/read tools: `remember_fact`, `forget_memory`,
 `update_project_memory`; and `recall_memory`, `list_project_memory`,
-`get_project_status`. Legacy names remain for compatibility. `/memory` and
+`get_project_memory_status`. Legacy names remain for compatibility. `/memory` and
 `/memory_status` show a short safe overview, `/memory_projects` lists projects,
 and `/memory_forget <id>` soft-deletes only the current owner’s record.
 
