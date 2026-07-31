@@ -22,6 +22,7 @@ from app.handlers import (
     memory_projects_command,
     memory_forget_command,
     memory_status_command,
+    skills_command,
     telegram_error_handler,
     tools_command,
 )
@@ -30,7 +31,8 @@ from app.memory.tools import register_memory_tools
 from app.reminders import ReminderScheduler, ReminderService, ReminderStorage
 from app.reminders.delivery import ReminderDelivery
 from app.reminders.tools import register_reminder_tools
-from app.health import set_reminder_health_provider, set_ssh_health_provider
+from app.health import set_reminder_health_provider, set_ssh_health_provider, set_skill_health_provider
+from app.skills.builtin import build_skill_registry
 from app.tools import create_default_tool_manager
 from app.ssh_agent.bootstrap import build_ssh_dependencies
 
@@ -142,6 +144,25 @@ def build_application(config: Config) -> Application:
         enabled=config.reminders_enabled,
         storage=reminder_service.storage if reminder_service else None,
     )
+    skill_registry = build_skill_registry(
+        tool_manager.registry,
+        config,
+        memory_manager=memory_manager,
+        reminder_service=reminder_service,
+        reminder_scheduler=reminder_scheduler,
+        ssh_dependencies=ssh_dependencies,
+    )
+    required_errors = skill_registry.required_errors()
+    if required_errors:
+        raise RuntimeError("Required Skills Registry capability is unhealthy")
+    summary = skill_registry.summary()
+    logger.info(
+        "skills initialized total=%s ok=%s warning=%s error=%s disabled=%s",
+        summary["total"], summary["ok"], summary["warning"],
+        summary["error"], summary["disabled"],
+    )
+    application.bot_data["skill_registry"] = skill_registry
+    set_skill_health_provider(skill_registry)
     application.bot_data["agent"] = JarvisAgent(
         ai_client.provider,
         tool_manager,
@@ -162,6 +183,7 @@ def build_application(config: Config) -> Application:
     application.add_handler(CommandHandler("status", status))
     application.add_handler(CommandHandler("tool", run_tool))
     application.add_handler(CommandHandler("tools", tools_command))
+    application.add_handler(CommandHandler("skills", skills_command))
     application.add_handler(CommandHandler("memory", memory_command))
     application.add_handler(CommandHandler("memory_projects", memory_projects_command))
     application.add_handler(CommandHandler("memory_forget", memory_forget_command))

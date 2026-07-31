@@ -29,6 +29,7 @@ from app.health import probe_health  # noqa: E402
 from app.infrastructure.hosts import load_hosts_config  # noqa: E402
 from app.memory import MemoryStorage  # noqa: E402
 from app.reminders import ReminderStorage  # noqa: E402
+from app.skills.builtin import build_skill_registry  # noqa: E402
 from app.startup import startup_self_check  # noqa: E402
 from app.tools import create_default_tool_manager  # noqa: E402
 from scripts.check_secrets import scan_repository  # noqa: E402
@@ -443,8 +444,15 @@ def validate(
     try:
         manager = create_default_tool_manager(str(paths.hosts_file))
         report.pass_(f"Tool registry: {len(manager.registry.list_tools())} tools")
+        if config is not None:
+            skills = build_skill_registry(manager.registry, config)
+            required_errors = skills.required_errors()
+            if required_errors:
+                report.fail("Skills Registry required capability")
+            else:
+                report.pass_(f"Skills Registry: {len(skills.list())} skills")
     except Exception:
-        report.fail("Tool registry")
+        report.fail("Tool registry or Skills Registry")
     if config is not None:
         try:
             startup_self_check(config)

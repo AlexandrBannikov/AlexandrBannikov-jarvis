@@ -34,6 +34,7 @@ HELP_MESSAGE = (
     "/tool system_info — локальная диагностика\n"
     "Проверки удалённых серверов выполняются только через утверждённые SSH tools.\n"
     "/tools — показать безопасные инструменты"
+    "\n/skills — показать состояние встроенных навыков"
     "\n/memory — краткая сводка долговременной памяти"
     "\n/memory_projects — известные проекты"
     "\n/memory_forget <id> — забыть принадлежащую вам запись"
@@ -215,6 +216,31 @@ async def tools_command(
         for tool in manager.registry.list_tools()
     )
     await message.reply_text("\n".join(lines))
+
+
+async def skills_command(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """Show compact, secret-free health of built-in capabilities."""
+    message = update.effective_message
+    registry = context.application.bot_data.get("skill_registry")
+    if message is None:
+        return
+    if registry is None:
+        await message.reply_text("🧩 Навыки Jarvis\nРеестр недоступен.")
+        return
+    lines = ["🧩 Навыки Jarvis"]
+    for report in registry.health():
+        icon = {
+            "ok": "✅", "warning": "⚠️", "error": "❌", "disabled": "⏸️",
+        }[report.health_status.value]
+        lines.append(f"{icon} {report.metadata.name}")
+        lines.append(f"   Инструментов: {len(report.metadata.tool_names)}")
+        if report.health_status.value != "ok":
+            lines.append(f"   Статус: {report.health_message}")
+    response = "\n".join(lines)
+    for chunk in _split_message(response):
+        await message.reply_text(chunk)
 
 
 def _memory_owner(update: Update) -> int:

@@ -11,6 +11,7 @@ _REMINDER_PROVIDER = None
 _REMINDER_STORAGE = None
 _REMINDERS_ENABLED = False
 _SSH_DEPENDENCIES = None
+_SKILL_REGISTRY = None
 
 
 def set_reminder_health_provider(provider, *, enabled: bool, storage=None) -> None:
@@ -23,6 +24,11 @@ def set_reminder_health_provider(provider, *, enabled: bool, storage=None) -> No
 def set_ssh_health_provider(dependencies) -> None:
     global _SSH_DEPENDENCIES
     _SSH_DEPENDENCIES = dependencies
+
+
+def set_skill_health_provider(registry) -> None:
+    global _SKILL_REGISTRY
+    _SKILL_REGISTRY = registry
 
 
 def health_payload() -> dict[str, object]:
@@ -53,6 +59,7 @@ def health_payload() -> dict[str, object]:
         "ssh_last_success_at": None,
         "ssh_last_error_code": None,
         "ssh_readiness_code": "SSH_DISABLED",
+        "skills": {"total": 0, "ok": 0, "warning": 0, "error": 0, "disabled": 0},
     }
     if _REMINDERS_ENABLED and _REMINDER_STORAGE is not None:
         try:
@@ -106,6 +113,11 @@ def health_payload() -> dict[str, object]:
                 "ssh_readiness_code": readiness.code.value,
             }
         )
+    if _SKILL_REGISTRY is not None:
+        try:
+            payload["skills"] = _SKILL_REGISTRY.summary()
+        except Exception:
+            payload["skills"] = {"total": 0, "ok": 0, "warning": 0, "error": 1, "disabled": 0}
     return payload
 
 

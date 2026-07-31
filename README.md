@@ -383,3 +383,22 @@ python -m app.reminders.cli list --user-id 228333796
 python -m app.reminders.cli due
 python -m app.reminders.cli validate
 ```
+
+## Skills Registry
+
+Jarvis использует встроенный Skills Registry как metadata-only слой поверх
+существующего `ToolRegistry`. Skill группирует уже зарегистрированные tools,
+описывает capabilities/permissions и предоставляет локальный health-статус.
+Registry не заменяет выполнение tools, SSH Agent Registry, memory или reminders
+scheduler.
+
+В production регистрируются только встроенные capabilities: `core`, `memory`,
+`reminders`, `ssh` и `web_search`. Источники ограничены `builtin` и
+`production`; пользовательские plugins, module paths, directory scanning,
+dynamic import, shell и package installation не поддерживаются.
+
+Команда `/skills` показывает безопасную сводку навыков и количество связанных
+tools. Health-статусы: `ok`, `warning`, `error`, `disabled`. Mock SSH считается
+предупреждением на уровне SSH readiness, а пустая memory-база не считается
+ошибкой. Skills Registry не запускает автономные задачи и не расширяет
+полномочия существующих tools.
