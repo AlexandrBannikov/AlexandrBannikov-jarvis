@@ -23,6 +23,8 @@ from app.handlers import (
     memory_forget_command,
     memory_status_command,
     skills_command,
+    conversation_command,
+    reset_context_command,
     telegram_error_handler,
     tools_command,
 )
@@ -31,8 +33,9 @@ from app.memory.tools import register_memory_tools
 from app.reminders import ReminderScheduler, ReminderService, ReminderStorage
 from app.reminders.delivery import ReminderDelivery
 from app.reminders.tools import register_reminder_tools
-from app.health import set_reminder_health_provider, set_ssh_health_provider, set_skill_health_provider
+from app.health import set_reminder_health_provider, set_ssh_health_provider, set_skill_health_provider, set_conversation_health_provider
 from app.skills.builtin import build_skill_registry
+from app.conversation import ConversationManager, ConversationStorage
 from app.tools import create_default_tool_manager
 from app.ssh_agent.bootstrap import build_ssh_dependencies
 
@@ -101,6 +104,15 @@ def build_application(config: Config) -> Application:
         register_memory_tools(tool_manager.registry, memory_manager)
     application.bot_data["tool_manager"] = tool_manager
     application.bot_data["memory_manager"] = memory_manager
+    conversation_manager = None
+    if config.conversation_state_enabled:
+        conversation_manager = ConversationManager(ConversationStorage(
+            config.conversation_db_path,
+            ttl_minutes=config.conversation_state_ttl_minutes,
+            max_messages=config.conversation_history_max_messages,
+        ))
+    application.bot_data["conversation_manager"] = conversation_manager
+    set_conversation_health_provider(conversation_manager.storage if conversation_manager else None)
     ssh_dependencies = build_ssh_dependencies(
         enabled=config.ssh_enabled,
         config_path=config.ssh_servers_config_path,
@@ -148,6 +160,7 @@ def build_application(config: Config) -> Application:
         tool_manager.registry,
         config,
         memory_manager=memory_manager,
+        conversation_manager=conversation_manager,
         reminder_service=reminder_service,
         reminder_scheduler=reminder_scheduler,
         ssh_dependencies=ssh_dependencies,
@@ -184,6 +197,8 @@ def build_application(config: Config) -> Application:
     application.add_handler(CommandHandler("tool", run_tool))
     application.add_handler(CommandHandler("tools", tools_command))
     application.add_handler(CommandHandler("skills", skills_command))
+    application.add_handler(CommandHandler("conversation", conversation_command))
+    application.add_handler(CommandHandler("reset_context", reset_context_command))
     application.add_handler(CommandHandler("memory", memory_command))
     application.add_handler(CommandHandler("memory_projects", memory_projects_command))
     application.add_handler(CommandHandler("memory_forget", memory_forget_command))

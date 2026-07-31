@@ -54,6 +54,10 @@ class Config:
     reminders_list_limit: int = 20
     ssh_enabled: bool = False
     ssh_servers_config_path: Path = Path("/etc/jarvis/servers.json")
+    conversation_state_enabled: bool = True
+    conversation_state_ttl_minutes: int = 60
+    conversation_history_max_messages: int = 20
+    conversation_db_path: Path = Path("/var/lib/jarvis/conversations.db")
 
 
 def _parse_boolean(value: str, name: str) -> bool:
@@ -290,4 +294,8 @@ def load_config(environment: Mapping[str, str] | None = None) -> Config:
             values.get("REMINDERS_LIST_LIMIT", "20"),
             "REMINDERS_LIST_LIMIT", 1, 100,
         ),
+        conversation_state_enabled=_parse_boolean(values.get("CONVERSATION_STATE_ENABLED", "true"), "CONVERSATION_STATE_ENABLED"),
+        conversation_state_ttl_minutes=_parse_bounded_int(values.get("CONVERSATION_STATE_TTL_MINUTES", "60"), "CONVERSATION_STATE_TTL_MINUTES", 5, 1440),
+        conversation_history_max_messages=_parse_bounded_int(values.get("CONVERSATION_HISTORY_MAX_MESSAGES", "20"), "CONVERSATION_HISTORY_MAX_MESSAGES", 4, 100),
+        conversation_db_path=Path(values.get("CONVERSATION_DB_PATH", "/var/lib/jarvis/conversations.db").strip() or "/var/lib/jarvis/conversations.db"),
     )

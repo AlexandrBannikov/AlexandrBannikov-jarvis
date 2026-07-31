@@ -12,6 +12,7 @@ _REMINDER_STORAGE = None
 _REMINDERS_ENABLED = False
 _SSH_DEPENDENCIES = None
 _SKILL_REGISTRY = None
+_CONVERSATION_PROVIDER = None
 
 
 def set_reminder_health_provider(provider, *, enabled: bool, storage=None) -> None:
@@ -29,6 +30,10 @@ def set_ssh_health_provider(dependencies) -> None:
 def set_skill_health_provider(registry) -> None:
     global _SKILL_REGISTRY
     _SKILL_REGISTRY = registry
+
+def set_conversation_health_provider(provider) -> None:
+    global _CONVERSATION_PROVIDER
+    _CONVERSATION_PROVIDER = provider
 
 
 def health_payload() -> dict[str, object]:
@@ -60,6 +65,7 @@ def health_payload() -> dict[str, object]:
         "ssh_last_error_code": None,
         "ssh_readiness_code": "SSH_DISABLED",
         "skills": {"total": 0, "ok": 0, "warning": 0, "error": 0, "disabled": 0},
+        "conversation_state": {"status": "disabled", "active_sessions": 0},
     }
     if _REMINDERS_ENABLED and _REMINDER_STORAGE is not None:
         try:
@@ -118,6 +124,11 @@ def health_payload() -> dict[str, object]:
             payload["skills"] = _SKILL_REGISTRY.summary()
         except Exception:
             payload["skills"] = {"total": 0, "ok": 0, "warning": 0, "error": 1, "disabled": 0}
+    if _CONVERSATION_PROVIDER is not None:
+        try:
+            payload["conversation_state"] = {"status": "ok", "active_sessions": int(_CONVERSATION_PROVIDER.active_sessions())}
+        except Exception:
+            payload["conversation_state"] = {"status": "warning", "active_sessions": 0}
     return payload
 
 

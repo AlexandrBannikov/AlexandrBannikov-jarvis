@@ -33,6 +33,7 @@ from app.tools.result import ToolResult
 from app.memory.manager import MemoryManager
 from app.ssh_agent.service_models import SSHRequestContext
 from app.ssh_agent.tools import SSHServiceTool
+from app.conversation import ConversationManager, PendingQuestion
 
 logger = logging.getLogger(__name__)
 audit_logger = logging.getLogger("jarvis.audit")
@@ -104,6 +105,7 @@ class JarvisAgent:
         web_search_enabled: bool = False,
         web_search_context_size: str = "medium",
         memory_manager: MemoryManager | None = None,
+        conversation_manager: ConversationManager | None = None,
     ) -> None:
         if max_tool_rounds < 1:
             raise ValueError("max_tool_rounds must be positive")
@@ -115,6 +117,7 @@ class JarvisAgent:
         self.web_search_enabled = web_search_enabled
         self.web_search_context_size = web_search_context_size
         self.memory_manager = memory_manager
+        self.conversation_manager = conversation_manager
 
     async def ask(
         self,
@@ -123,6 +126,8 @@ class JarvisAgent:
         chat_id: int | None = None,
         source_message_id: int | None = None,
         is_allowlisted: bool = False,
+        thread_id: int | None = None,
+        reply_to_message_id: int | None = None,
     ) -> str:
         started_at = time.monotonic()
         rounds = 0
@@ -161,6 +166,28 @@ class JarvisAgent:
             return WEB_SEARCH_SECRET_MESSAGE
         try:
             instructions = JARVIS_SYSTEM_PROMPT
+            conversation_key = None
+            active_conversation = False
+            conversation_input: list[dict[str, str]] | None = None
+            if self.conversation_manager is not None and user_id is not None and chat_id is not None:
+                conversation_key = self.conversation_manager.key(user_id, chat_id, thread_id)
+                intent = self.conversation_manager.record_user(
+                    conversation_key, user_text, message_id=source_message_id,
+                    reply_to=reply_to_message_id,
+                )
+                history = self.conversation_manager.context(conversation_key, user_text)
+                conversation_input = [
+                    {"role": item["role"] if item["role"] in {"user", "assistant"} else "user",
+                     "content": item["content"] if item["role"] != "tool" else "Tool result summary: " + item["content"]}
+                    for item in history
+                ]
+                active_state = self.conversation_manager.storage.get_state(conversation_key)
+                active_conversation = bool(active_state and active_state.status == "active" and not active_state.is_expired())
+                rendered = "\n".join(f"[{item['provenance']}] {item['role']}: {item['content']}" for item in history)
+                instructions += ("\n\nConversation continuity policy: prioritize current chat, "
+                    "pending questions and recent history over persistent projects. "
+                    "Treat natural short answers as continuations and never choose a random stored project. "
+                    f"\nIntent={intent}\n{rendered}")
             if self.memory_manager is not None:
                 await self._run_sync(
                     self.memory_manager.autosave, user_text, owner_id=user_id or 0
@@ -169,14 +196,10 @@ class JarvisAgent:
                     self.memory_manager.relevant_context, user_text,
                     owner_id=user_id or 0
                 )
-                if memory_context:
-                    instructions = (
-                        JARVIS_SYSTEM_PROMPT + "\n\n" + memory_context
-                    )
+                if memory_context and not active_conversation:
+                    instructions += "\n\n" + memory_context
             response = await self._create_response(
-                input_items=[
-                    {"role": "user", "content": user_text},
-                ],
+                input_items=conversation_input or [{"role": "user", "content": user_text}],
                 tools=self._tool_schemas(allow_web=not contains_secret),
                 tool_choice="auto",
                 instructions=instructions,
@@ -237,7 +260,13 @@ class JarvisAgent:
                     text = str(getattr(response, "output_text", "") or "").strip()
                     if text:
                         success = True
-                        return self._format_sources(text, sources)
+                        final_text = self._format_sources(text, sources)
+                        if conversation_key is not None:
+                            self.conversation_manager.record_assistant(
+                                conversation_key, final_text,
+                                pending=self._pending_from_text(final_text),
+                            )
+                        return final_text
                     error_type = "empty_response"
                     return EMPTY_RESPONSE_MESSAGE
                 if rounds >= self.max_tool_rounds:
@@ -247,15 +276,18 @@ class JarvisAgent:
                 rounds += 1
                 outputs = []
                 for call in calls:
-                    outputs.append(
-                        await self._execute_call(
+                    output = await self._execute_call(
                             call,
                             user_id=user_id,
                             chat_id=chat_id,
                             source_message_id=source_message_id,
                             ssh_context=ssh_context,
                         )
-                    )
+                    outputs.append(output)
+                    if conversation_key is not None:
+                        self.conversation_manager.storage.append_message(
+                            conversation_key, "tool", str(output.get("output", ""))[:1000], provenance="TOOL_RESULT"
+                        )
                 response = await self._create_response(
                     input_items=outputs,
                     tools=self._tool_schemas(
@@ -328,6 +360,19 @@ class JarvisAgent:
             instructions=instructions,
             **kwargs,
         )
+
+    @staticmethod
+    def _pending_from_text(text: str) -> PendingQuestion | None:
+        patterns = (
+            (r"(?i)(какой|какого|какие).{0,80}(двигател|объ[её]м|мощност)", "engine_spec", ["engine_displacement", "engine_power"]),
+            (r"(?i)(какой|какого).{0,50}(год|бюджет|срок)", "missing_detail", ["detail"]),
+        )
+        for pattern, question_id, fields in patterns:
+            match = re.search(pattern, text)
+            if match and "?" in text[match.start():]:
+                line = text[max(0, text.rfind("\n", 0, match.start()) + 1):]
+                return PendingQuestion(question_id, line[:1000], fields)
+        return None
 
     def _tool_schemas(self, *, allow_web: bool) -> list[dict[str, Any]]:
         tools = self.adapter.schemas()

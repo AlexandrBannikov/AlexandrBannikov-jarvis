@@ -30,6 +30,7 @@ from app.infrastructure.hosts import load_hosts_config  # noqa: E402
 from app.memory import MemoryStorage  # noqa: E402
 from app.reminders import ReminderStorage  # noqa: E402
 from app.skills.builtin import build_skill_registry  # noqa: E402
+from app.conversation import ConversationStorage  # noqa: E402
 from app.startup import startup_self_check  # noqa: E402
 from app.tools import create_default_tool_manager  # noqa: E402
 from scripts.check_secrets import scan_repository  # noqa: E402
@@ -360,6 +361,21 @@ def validate(
             report.fail("Project memory SQLite database writable")
     else:
         report.warn("Project memory disabled")
+    if config is not None and config.conversation_state_enabled and values.get("CONVERSATION_DB_PATH", "").strip():
+        try:
+            conversation_storage = ConversationStorage(
+                config.conversation_db_path,
+                ttl_minutes=config.conversation_state_ttl_minutes,
+                max_messages=config.conversation_history_max_messages,
+            )
+            if conversation_storage.validate_schema():
+                report.pass_("Conversation state SQLite schema and migrations")
+            else:
+                report.fail("Conversation state SQLite schema and migrations")
+        except Exception:
+            report.fail("Conversation state database and limits")
+    else:
+        report.warn("Conversation state disabled")
     if config is not None and config.reminders_enabled:
         try:
             database_path = config.reminders_db_path.resolve()

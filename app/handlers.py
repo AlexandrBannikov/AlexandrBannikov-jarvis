@@ -38,6 +38,8 @@ HELP_MESSAGE = (
     "\n/memory — краткая сводка долговременной памяти"
     "\n/memory_projects — известные проекты"
     "\n/memory_forget <id> — забыть принадлежащую вам запись"
+    "\n/conversation — показать текущую тему"
+    "\n/reset_context — начать текущий диалог заново"
 )
 PROCESS_STARTED_AT = time.monotonic()
 MAX_INPUT_LENGTH = 4_000
@@ -242,6 +244,22 @@ async def skills_command(
     for chunk in _split_message(response):
         await message.reply_text(chunk)
 
+async def conversation_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = update.effective_message
+    manager = context.application.bot_data.get("conversation_manager")
+    if message is None or manager is None:
+        if message: await message.reply_text("Текущее состояние диалога недоступно.")
+        return
+    key = manager.key(_memory_owner(update), update.effective_chat.id if update.effective_chat else 0)
+    await message.reply_text(manager.summary(key))
+
+async def reset_context_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = update.effective_message
+    manager = context.application.bot_data.get("conversation_manager")
+    if message is None or manager is None: return
+    manager.storage.clear(manager.key(_memory_owner(update), update.effective_chat.id if update.effective_chat else 0))
+    await message.reply_text("Текущая тема диалога сброшена.")
+
 
 def _memory_owner(update: Update) -> int:
     return update.effective_user.id if update.effective_user else 0
@@ -344,18 +362,14 @@ async def handle_text(
             _show_typing(context, update.effective_chat.id)
         )
         try:
-            response = await agent.ask(
-                prompt,
-                user_id=user_id,
-                chat_id=chat_id,
-                source_message_id=getattr(message, "message_id", None),
-                is_allowlisted=(
-                    user_id
-                    in context.application.bot_data[
-                        "config"
-                    ].telegram_allowed_user_ids
-                ),
-            )
+            ask_kwargs = dict(user_id=user_id, chat_id=chat_id,
+                              source_message_id=getattr(message, "message_id", None),
+                              is_allowlisted=(user_id in context.application.bot_data["config"].telegram_allowed_user_ids))
+            thread_id = getattr(message, "message_thread_id", None)
+            reply_to = getattr(getattr(message, "reply_to_message", None), "message_id", None)
+            if thread_id is not None: ask_kwargs["thread_id"] = thread_id
+            if reply_to is not None: ask_kwargs["reply_to_message_id"] = reply_to
+            response = await agent.ask(prompt, **ask_kwargs)
         except (
             LLMConfigurationError,
             LLMTimeoutError,
