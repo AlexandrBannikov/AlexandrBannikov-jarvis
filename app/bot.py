@@ -160,7 +160,6 @@ def build_application(config: Config) -> Application:
         tool_manager.registry,
         config,
         memory_manager=memory_manager,
-        conversation_manager=conversation_manager,
         reminder_service=reminder_service,
         reminder_scheduler=reminder_scheduler,
         ssh_dependencies=ssh_dependencies,
@@ -183,6 +182,7 @@ def build_application(config: Config) -> Application:
         web_search_enabled=config.web_search_enabled,
         web_search_context_size=config.web_search_context_size,
         memory_manager=memory_manager,
+        conversation_manager=conversation_manager,
     )
     application.bot_data["user_locks"] = {}
     application.add_handler(
