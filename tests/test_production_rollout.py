@@ -71,6 +71,8 @@ def write_valid_environment(paths: rollout.RolloutPaths) -> None:
                 "LOG_LEVEL=INFO",
                 "HEALTH_HOST=127.0.0.1",
                 "HEALTH_PORT=18090",
+                f"ACCESS_DB_PATH={paths.project_root / 'access.db'}",
+                "FAMILY_INVITE_TTL_SECONDS=86400",
             ]
         ),
         encoding="utf-8",

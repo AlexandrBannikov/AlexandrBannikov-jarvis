@@ -407,3 +407,19 @@ tools. Health-статусы: `ok`, `warning`, `error`, `disabled`. Mock SSH с�
 предупреждением на уровне SSH readiness, а пустая memory-база не считается
 ошибкой. Skills Registry не запускает автономные задачи и не расширяет
 полномочия существующих tools.
+
+## Controlled family access
+
+`TELEGRAM_ALLOWED_USER_IDS` остаётся закрытым списком владельцев; публичный
+режим не создаёт principal. Владелец выдаёт доступ командой `/invite_family`.
+Deep-link содержит одноразовый случайный token с TTL
+`FAMILY_INVITE_TTL_SECONDS` (по умолчанию 24 часа); в SQLite хранится только
+SHA-256 hash. Family user получает chat, web search/weather, собственные
+conversation/reminders/location/timezone и явно общую family memory.
+SSH, server/systemd/logs/production и admin capabilities скрываются до prompt
+и повторно блокируются перед выполнением tool.
+
+`disabled` и `removed` немедленно запрещают новые запросы, но не удаляют
+personal или family data. Scheduler сохраняет напоминания; доставка
+отключённому пользователю блокируется access guard и может быть возобновлена
+после `/enable_family_user`. Удаление данных — отдельная будущая операция.

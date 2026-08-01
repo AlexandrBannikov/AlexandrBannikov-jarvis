@@ -221,6 +221,18 @@ class MemoryStorage:
     def count_active(self, owner_id: int) -> int:
         return len(self.list_active(owner_id=owner_id, include_system=True))
 
+    def list_family_safe(self, owner_id: int) -> list[MemoryRecord]:
+        """Return personal records plus explicitly shared family records only."""
+        now = utc_now_text()
+        with self._connect() as db:
+            rows = db.execute("""SELECT * FROM memories
+                WHERE is_active=1 AND (expires_at IS NULL OR expires_at>?)
+                AND (owner_id=? OR (owner_id=0 AND namespace='family'))
+                AND scope NOT IN ('environment','system','project')
+                ORDER BY importance DESC,confidence DESC,updated_at DESC,id DESC""",
+                (now, owner_id)).fetchall()
+        return [self._memory(row) for row in rows]
+
     def update(self, memory_id: int, *, title: str, content: str,
                tags: Iterable[str], importance: int, owner_id: int = 0) -> MemoryRecord:
         with self._connect() as db:

@@ -33,6 +33,7 @@ from app.skills.builtin import build_skill_registry  # noqa: E402
 from app.conversation import ConversationStorage  # noqa: E402
 from app.startup import startup_self_check  # noqa: E402
 from app.tools import create_default_tool_manager  # noqa: E402
+from app.access import AccessStorage, CapabilityPolicy, Principal  # noqa: E402
 from scripts.check_secrets import scan_repository  # noqa: E402
 
 ENV_TEMPLATE = """TELEGRAM_BOT_TOKEN=
@@ -75,6 +76,8 @@ LOG_LEVEL=INFO
 HEALTH_HOST=127.0.0.1
 HEALTH_PORT=8090
 TELEGRAM_STARTUP_NOTIFICATION=false
+ACCESS_DB_PATH=/var/lib/jarvis/access.db
+FAMILY_INVITE_TTL_SECONDS=86400
 """
 HOSTS_TEMPLATE = """hosts: {}
 
@@ -350,6 +353,31 @@ def validate(
         report.pass_("OpenAI web search explicitly enabled")
     else:
         report.warn("OpenAI web search disabled")
+    if config is not None:
+        try:
+            access = AccessStorage(config.access_db_path)
+            access.initialize(config.telegram_allowed_user_ids)
+            policy = CapabilityPolicy()
+            owner_ok = all(
+                access.principal(user_id) is not None
+                and access.principal(user_id).role == "owner"
+                for user_id in config.telegram_allowed_user_ids
+            )
+            family = Principal(1, "family_user", "active")
+            matrix_ok = (
+                policy.allows(family, "assistant.web_search")
+                and not policy.allows(family, "technical.ssh")
+                and not policy.allows(family, "admin.roles")
+                and not policy.allows(family, "unknown")
+            )
+            if access.validate_schema() and owner_ok and matrix_ok:
+                report.pass_("Family role schema, owner and capability matrix")
+                report.pass_("Invite schema and one-time token storage")
+                report.pass_("Family web search allowed; technical access denied")
+            else:
+                report.fail("Family access policy validation")
+        except Exception:
+            report.fail("Family access database and policy")
     if config is not None and config.memory_enabled:
         try:
             memory_storage = MemoryStorage(config.memory_db_path)

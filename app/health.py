@@ -14,6 +14,7 @@ _SSH_DEPENDENCIES = None
 _SKILL_REGISTRY = None
 _CONVERSATION_PROVIDER = None
 _LOCATION_STORAGE = None
+_FAMILY_ACCESS_STORAGE = None
 
 
 def set_reminder_health_provider(provider, *, enabled: bool, storage=None) -> None:
@@ -39,6 +40,10 @@ def set_conversation_health_provider(provider) -> None:
 def set_location_health_provider(storage) -> None:
     global _LOCATION_STORAGE
     _LOCATION_STORAGE = storage
+
+def set_family_access_health_provider(storage) -> None:
+    global _FAMILY_ACCESS_STORAGE
+    _FAMILY_ACCESS_STORAGE = storage
 
 
 def health_payload() -> dict[str, object]:
@@ -72,6 +77,8 @@ def health_payload() -> dict[str, object]:
         "skills": {"total": 0, "ok": 0, "warning": 0, "error": 0, "disabled": 0},
         "conversation_state": {"status": "disabled", "active_sessions": 0},
         "location_context": {"status": "disabled", "users_with_location": 0},
+        "family_access": {"status": "disabled", "active_family_users": 0,
+                          "pending_invites": 0, "disabled_users": 0},
     }
     if _REMINDERS_ENABLED and _REMINDER_STORAGE is not None:
         try:
@@ -138,6 +145,9 @@ def health_payload() -> dict[str, object]:
     if _LOCATION_STORAGE is not None:
         try: payload["location_context"] = {"status":"ok","users_with_location":_LOCATION_STORAGE.count_active_users()}
         except Exception: payload["location_context"] = {"status":"error","users_with_location":0}
+    if _FAMILY_ACCESS_STORAGE is not None:
+        try: payload["family_access"] = _FAMILY_ACCESS_STORAGE.summary()
+        except Exception: payload["family_access"] = {"status":"error","active_family_users":0,"pending_invites":0,"disabled_users":0}
     return payload
 
 

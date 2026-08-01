@@ -34,6 +34,7 @@ from app.memory.manager import MemoryManager
 from app.ssh_agent.service_models import SSHRequestContext
 from app.ssh_agent.tools import SSHServiceTool
 from app.conversation import ConversationManager, PendingQuestion
+from app.access import CapabilityPolicy, Principal, RateLimiter, OWNER
 
 logger = logging.getLogger(__name__)
 audit_logger = logging.getLogger("jarvis.audit")
@@ -79,12 +80,18 @@ _EXPLICIT_WEB_SEARCH = re.compile(
 _CURRENT_INFORMATION = re.compile(
     r"(?i)\b(?:сегодня|сейчас|текущ(?:ий|ая|ее|ие)|актуальн|"
     r"последн(?:ий|яя|ее|ие|юю)|новост|погод|прогноз|курс|цен[аы]|"
-    r"расписани|результат(?:ы)?\s+матч)"
+    r"расписани|результат(?:ы)?\s+матч|подбер|выбрать|сравни|инструкц)"
 )
 _WEATHER_REQUEST = re.compile(r"(?i)\b(?:погод|прогноз)\w*")
 _WEATHER_WITH_PLACE = re.compile(
     r"(?i)\b(?:погод|прогноз)\w*\s+(?:в|во|для)\s+"
     r"(?!мо(?:ей|его)\s+геопозиц)"
+)
+_TECHNICAL_OPERATION = re.compile(
+    r"(?i)\b(?:сервер|systemd|лог|vpn|firewall|production|crypto bot)\w*"
+)
+_TECHNICAL_ACTION = re.compile(
+    r"(?i)\b(?:покаж|проверь|статус|состояни|перезапуст|рестарт|депло|управ)\w*"
 )
 
 
@@ -120,6 +127,8 @@ class JarvisAgent:
         memory_manager: MemoryManager | None = None,
         conversation_manager: ConversationManager | None = None,
         location_service: object | None = None,
+        capability_policy: CapabilityPolicy | None = None,
+        rate_limiter: RateLimiter | None = None,
     ) -> None:
         if max_tool_rounds < 1:
             raise ValueError("max_tool_rounds must be positive")
@@ -133,6 +142,8 @@ class JarvisAgent:
         self.memory_manager = memory_manager
         self.conversation_manager = conversation_manager
         self.location_service = location_service
+        self.capability_policy = capability_policy or CapabilityPolicy()
+        self.rate_limiter = rate_limiter
 
     async def ask(
         self,
@@ -143,8 +154,16 @@ class JarvisAgent:
         is_allowlisted: bool = False,
         thread_id: int | None = None,
         reply_to_message_id: int | None = None,
+        principal: Principal | None = None,
     ) -> str:
         started_at = time.monotonic()
+        trusted_principal = principal or Principal(user_id or 0, OWNER, "active")
+        if not self.capability_policy.require(trusted_principal, "assistant.chat"):
+            return "Доступ к этому боту предоставляется только по приглашению владельца."
+        if (trusted_principal.role != OWNER
+                and _TECHNICAL_OPERATION.search(user_text)
+                and _TECHNICAL_ACTION.search(user_text)):
+            return "Техническое управление серверами доступно только владельцу."
         rounds = 0
         success = False
         error_type = "none"
@@ -163,6 +182,9 @@ class JarvisAgent:
         explicit_search = bool(_EXPLICIT_WEB_SEARCH.search(user_text))
         current_information = bool(_CURRENT_INFORMATION.search(user_text))
         search_required = explicit_search or current_information
+        if (search_required and self.rate_limiter is not None and
+                not self.rate_limiter.web_search(trusted_principal)):
+            return "Лимит интернет-поиска временно исчерпан. Попробуйте позже."
         weather_request = bool(_WEATHER_REQUEST.search(user_text))
         if explicit_search and not self.web_search_enabled:
             audit_logger.info(
@@ -223,16 +245,34 @@ class JarvisAgent:
                     "Treat natural short answers as continuations and never choose a random stored project. "
                     f"\nIntent={intent}\n{rendered}")
             if self.memory_manager is not None:
-                await self._run_sync(
-                    self.memory_manager.autosave, user_text, owner_id=user_id or 0
-                )
-                memory_context = await self._run_sync(
-                    self.memory_manager.relevant_context, user_text,
-                    owner_id=user_id or 0
-                )
+                family_write = bool(re.search(
+                    r"(?i)(сохрани.*для семьи|общ(?:ую|ей) память|семейн(?:ая|ой) информац)",
+                    user_text,
+                ))
+                if family_write:
+                    await self._run_sync(
+                        self.memory_manager.service.remember_family, user_text
+                    )
+                else:
+                    await self._run_sync(
+                        self.memory_manager.autosave, user_text,
+                        owner_id=user_id or 0,
+                    )
+                if trusted_principal.role == OWNER:
+                    memory_context = await self._run_sync(
+                        self.memory_manager.relevant_context, user_text,
+                        owner_id=user_id or 0,
+                    )
+                else:
+                    memory_context = await self._run_sync(
+                        self.memory_manager.service.build_family_user_context,
+                        user_id or 0, user_text,
+                    )
                 if memory_context and not active_conversation:
                     instructions += "\n\n" + memory_context
-            allow_web = search_required and not contains_secret
+            allow_web = (search_required and not contains_secret and
+                         self.capability_policy.allows(
+                             trusted_principal, "assistant.web_search"))
             audit_logger.info(
                 "agent_routing user_id=%s tool_selected=%s "
                 "tool_skipped=%s fallback_reason=none",
@@ -242,7 +282,9 @@ class JarvisAgent:
             )
             response = await self._create_response(
                 input_items=conversation_input or [{"role": "user", "content": user_text}],
-                tools=self._tool_schemas(allow_web=allow_web),
+                tools=self._tool_schemas(
+                    allow_web=allow_web, principal=trusted_principal
+                ),
                 tool_choice="auto",
                 instructions=instructions,
             )
@@ -324,6 +366,7 @@ class JarvisAgent:
                             chat_id=chat_id,
                             source_message_id=source_message_id,
                             ssh_context=ssh_context,
+                            principal=trusted_principal,
                         )
                     outputs.append(output)
                     if conversation_key is not None:
@@ -333,7 +376,7 @@ class JarvisAgent:
                 response = await self._create_response(
                     input_items=outputs,
                     tools=self._tool_schemas(
-                        allow_web=allow_web
+                        allow_web=allow_web, principal=trusted_principal
                     ),
                     tool_choice="auto",
                     previous_response_id=raw_response_id,
@@ -367,7 +410,7 @@ class JarvisAgent:
             if explicit_search:
                 return WEB_SEARCH_UNAVAILABLE_MESSAGE
             return await self._fallback_without_web(
-                user_text, user_id=user_id
+                user_text, user_id=user_id, principal=trusted_principal
             )
         except LLMConfigurationError:
             error_type = "configuration_error"
@@ -426,8 +469,18 @@ class JarvisAgent:
                 return PendingQuestion(question_id, line[:1000], fields)
         return None
 
-    def _tool_schemas(self, *, allow_web: bool) -> list[dict[str, Any]]:
-        tools = self.adapter.schemas()
+    def _tool_schemas(self, *, allow_web: bool,
+                      principal: Principal | None = None) -> list[dict[str, Any]]:
+        current = principal or Principal(0, OWNER, "active")
+        tools = [schema for schema in self.adapter.schemas()
+                 if self.capability_policy.allows(
+                     current,
+                     self.capability_policy.tool_capability(schema["name"]),
+                 ) and not (
+                     current.role != OWNER and
+                     ("memory" in schema["name"] or
+                      schema["name"] in {"remember", "forget"})
+                 )]
         if self.web_search_enabled and allow_web:
             tools.append(
                 {
@@ -438,13 +491,14 @@ class JarvisAgent:
         return tools
 
     async def _fallback_without_web(
-        self, user_text: str, *, user_id: int | None
+        self, user_text: str, *, user_id: int | None,
+        principal: Principal | None = None,
     ) -> str:
         """Allow a stable-knowledge answer after hosted search failure."""
         try:
             response = await self._create_response(
                 input_items=[{"role": "user", "content": user_text}],
-                tools=self.adapter.schemas(),
+                tools=self._tool_schemas(allow_web=False, principal=principal),
                 tool_choice="auto",
                 instructions=(
                     JARVIS_SYSTEM_PROMPT
@@ -570,9 +624,22 @@ class JarvisAgent:
         chat_id: int | None = None,
         source_message_id: int | None = None,
         ssh_context: SSHRequestContext | None = None,
+        principal: Principal | None = None,
     ) -> dict[str, str]:
         call_id = str(_item_value(call, "call_id", ""))
         tool_name = str(_item_value(call, "name", ""))
+        capability = self.capability_policy.tool_capability(tool_name)
+        execution_principal = principal or Principal(user_id or 0, OWNER, "active")
+        if not self.capability_policy.require(execution_principal, capability):
+            result = ToolResult(
+                success=False, tool=tool_name or "unknown", data={},
+                message="Эта техническая функция доступна только владельцу.",
+                duration_ms=0, error="CAPABILITY_DENIED",
+            )
+            return {
+                "type": "function_call_output", "call_id": call_id,
+                "output": serialize_tool_result(result),
+            }
         raw_arguments = _item_value(call, "arguments", "")
         safe_metadata: dict[str, Any] = {}
         try:

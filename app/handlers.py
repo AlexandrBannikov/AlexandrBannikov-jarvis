@@ -24,6 +24,7 @@ from app.ai.provider import (
 from app.reminders.service import ReminderError
 from app.location.models import LocationCandidate
 from zoneinfo import ZoneInfo
+from app.access import CapabilityPolicy, Principal, OWNER
 
 logger = logging.getLogger(__name__)
 START_MESSAGE = "Привет.\nЯ Jarvis.\nСистема запущена."
@@ -46,6 +47,21 @@ HELP_MESSAGE = (
     "\n/location — показать подтверждённое местоположение"
     "\n/timezone — показать часовой пояс и местное время"
     "\n/clear_location — удалить местоположение"
+    "\n/invite_family — создать одноразовое семейное приглашение"
+    "\n/family_users — семейные пользователи"
+    "\n/revoke_family_invite — отозвать ожидающие приглашения"
+    "\n/disable_family_user <id> — временно отключить доступ"
+    "\n/enable_family_user <id> — включить доступ"
+    "\n/remove_family_user <id> — отозвать доступ без удаления данных"
+)
+FAMILY_HELP_MESSAGE = (
+    "Доступные возможности:\n"
+    "обычные вопросы, интернет-поиск, погода, личная и семейная память, "
+    "напоминания, геопозиция и часовой пояс.\n"
+    "/help /ping /skills /tools /memory /conversation /location /timezone"
+)
+INVITE_ONLY_MESSAGE = (
+    "Доступ к этому боту предоставляется только по приглашению владельца."
 )
 PROCESS_STARTED_AT = time.monotonic()
 MAX_INPUT_LENGTH = 4_000
@@ -91,16 +107,28 @@ async def log_incoming_update(
     )
 
 
+def _principal(update: Update, context) -> Principal | None:
+    user = getattr(update, "effective_user", None)
+    if user is None:
+        return None
+    storage = context.application.bot_data.get("access_storage")
+    if storage is not None:
+        return storage.principal(user.id)
+    config = context.application.bot_data["config"]
+    if user.id in config.telegram_allowed_user_ids:
+        return Principal(user.id, OWNER, "active")
+    return None
+
+
 async def authorize(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
     """Stop processing updates from users outside the configured allowlist."""
-    config = context.application.bot_data["config"]
     user = update.effective_user
-    is_allowed = config.allow_public_access or (
-        user is not None and user.id in config.telegram_allowed_user_ids
-    )
-    if is_allowed:
+    principal = _principal(update, context)
+    if principal is not None and principal.status == "active":
+        if hasattr(context, "user_data"):
+            context.user_data["principal"] = principal
         logger.info(
             "Telegram update authorized: update_id=%s user_id=%s",
             update.update_id,
@@ -112,25 +140,47 @@ async def authorize(
         update.update_id,
         user.id if user else None,
     )
+    text = str(getattr(update.effective_message, "text", "") or "")
+    if text.startswith("/start "):
+        return
     if update.effective_message:
-        await update.effective_message.reply_text("Доступ запрещён.")
+        await update.effective_message.reply_text(INVITE_ONLY_MESSAGE)
     raise ApplicationHandlerStop
 
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE | None) -> None:
     """Respond to /start."""
-    del context
-    if update.effective_message:
-        await update.effective_message.reply_text(START_MESSAGE)
+    message = update.effective_message
+    if message is None:
+        return
+    if context is None or not getattr(context, "args", None):
+        await message.reply_text(START_MESSAGE)
+        return
+    user = update.effective_user
+    storage = context.application.bot_data.get("access_storage")
+    if user is None or storage is None:
+        await message.reply_text(INVITE_ONLY_MESSAGE)
+        return
+    result = storage.redeem(
+        context.args[0], user.id,
+        getattr(user, "full_name", "") or "",
+        getattr(user, "username", "") or "",
+    )
+    if result == "created":
+        await message.reply_text("Доступ активирован. Добро пожаловать в Jarvis!")
+    else:
+        await message.reply_text("Приглашение недействительно, использовано или истекло.")
 
 
 async def help_command(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
     """Respond to /help."""
-    del context
     if update.effective_message:
-        await update.effective_message.reply_text(HELP_MESSAGE)
+        principal = _principal(update, context) if context is not None else None
+        await update.effective_message.reply_text(
+            FAMILY_HELP_MESSAGE if principal and principal.role == "family_user" else HELP_MESSAGE
+        )
 
 
 async def ping(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -159,7 +209,15 @@ def _format_uptime(seconds: float) -> str:
 
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Respond to /status with process and host information."""
-    del context
+    if context is not None:
+        principal = _principal(update, context)
+        policy = context.application.bot_data.get("capability_policy", CapabilityPolicy())
+        if not policy.require(principal, "technical.production_diagnostics"):
+            if update.effective_message:
+                await update.effective_message.reply_text(
+                    "Эта техническая функция доступна только владельцу."
+                )
+            return
     now = datetime.now(timezone.utc)
     message = (
         "Jarvis online\n"
@@ -180,11 +238,9 @@ async def run_tool(
     if message is None:
         return
     user = update.effective_user
-    config = context.application.bot_data["config"]
-    if (
-        user is None
-        or user.id not in config.telegram_allowed_user_ids
-    ):
+    principal = _principal(update, context)
+    policy = context.application.bot_data.get("capability_policy", CapabilityPolicy())
+    if user is None or not policy.require(principal, "technical.production_diagnostics"):
         await message.reply_text("Доступ запрещён.")
         return
 
@@ -219,9 +275,12 @@ async def tools_command(
         return
     manager = context.application.bot_data["tool_manager"]
     lines = ["Доступные read-only инструменты:"]
+    principal = _principal(update, context)
+    policy = context.application.bot_data.get("capability_policy", CapabilityPolicy())
     lines.extend(
         f"- {tool.name}: {tool.description}"
         for tool in manager.registry.list_tools()
+        if policy.allows(principal, policy.tool_capability(tool.name))
     )
     await message.reply_text("\n".join(lines))
 
@@ -238,7 +297,11 @@ async def skills_command(
         await message.reply_text("🧩 Навыки Jarvis\nРеестр недоступен.")
         return
     lines = ["🧩 Навыки Jarvis"]
+    principal = _principal(update, context)
+    policy = context.application.bot_data.get("capability_policy", CapabilityPolicy())
     for report in registry.health():
+        if report.metadata.skill_id == "ssh" and not policy.allows(principal, "technical.ssh"):
+            continue
         icon = {
             "ok": "✅", "warning": "⚠️", "error": "❌", "disabled": "⏸️",
         }[report.health_status.value]
@@ -249,6 +312,87 @@ async def skills_command(
     response = "\n".join(lines)
     for chunk in _split_message(response):
         await message.reply_text(chunk)
+
+
+async def invite_family_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = update.effective_message
+    principal = _principal(update, context)
+    policy = context.application.bot_data["capability_policy"]
+    if message is None or not policy.require(principal, "admin.invites"):
+        if message: await message.reply_text("Доступ запрещён.")
+        return
+    token = context.application.bot_data["access_storage"].create_invite(
+        principal.user_id, context.application.bot_data["config"].family_invite_ttl_seconds
+    )
+    bot = await context.bot.get_me()
+    await message.reply_text(
+        f"Одноразовая ссылка действует ограниченное время:\nhttps://t.me/{bot.username}?start={token}"
+    )
+
+
+async def family_users_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = update.effective_message
+    principal = _principal(update, context)
+    if message is None or not context.application.bot_data["capability_policy"].require(principal, "admin.users"):
+        if message: await message.reply_text("Доступ запрещён.")
+        return
+    users = context.application.bot_data["access_storage"].list_family()
+    lines = ["Семейные пользователи:"]
+    for user in users:
+        name = user.display_name or "Без имени"
+        username = f" (@{user.username})" if user.username else ""
+        lines.append(f"- {name}{username}: {user.role}, {user.status}")
+    await message.reply_text("\n".join(lines) if users else "Семейных пользователей нет.")
+
+
+async def disable_family_user_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = update.effective_message
+    principal = _principal(update, context)
+    if message is None or not context.application.bot_data["capability_policy"].require(principal, "admin.users"):
+        if message: await message.reply_text("Доступ запрещён.")
+        return
+    if len(context.args) != 1 or not context.args[0].isdigit():
+        await message.reply_text("Использование: /disable_family_user <Telegram ID>")
+        return
+    changed = context.application.bot_data["access_storage"].set_family_status(
+        int(context.args[0]), "disabled"
+    )
+    await message.reply_text("Доступ отключён, данные сохранены." if changed else "Пользователь не найден.")
+
+
+async def enable_family_user_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await _set_family_user_command(update, context, "active", "Доступ включён.")
+
+
+async def remove_family_user_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await _set_family_user_command(
+        update, context, "removed", "Доступ отозван, данные не удалены."
+    )
+
+
+async def _set_family_user_command(update, context, status_value: str, success: str) -> None:
+    message = update.effective_message
+    principal = _principal(update, context)
+    if message is None or not context.application.bot_data["capability_policy"].require(principal, "admin.users"):
+        if message: await message.reply_text("Доступ запрещён.")
+        return
+    if len(context.args) != 1 or not context.args[0].isdigit():
+        await message.reply_text("Укажите Telegram ID семейного пользователя.")
+        return
+    changed = context.application.bot_data["access_storage"].set_family_status(
+        int(context.args[0]), status_value
+    )
+    await message.reply_text(success if changed else "Пользователь не найден.")
+
+
+async def revoke_family_invite_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = update.effective_message
+    principal = _principal(update, context)
+    if message is None or not context.application.bot_data["capability_policy"].require(principal, "admin.invites"):
+        if message: await message.reply_text("Доступ запрещён.")
+        return
+    count = context.application.bot_data["access_storage"].revoke_pending_invites(principal.user_id)
+    await message.reply_text(f"Отозвано ожидающих приглашений: {count}.")
 
 async def conversation_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     message = update.effective_message
@@ -398,6 +542,15 @@ async def handle_text(
         return
 
     async with user_lock:
+        principal = _principal(update, context)
+        policy = context.application.bot_data.get("capability_policy", CapabilityPolicy())
+        if not policy.require(principal, "assistant.chat"):
+            await message.reply_text(INVITE_ONLY_MESSAGE)
+            return
+        limiter = context.application.bot_data.get("rate_limiter")
+        if limiter is not None and not limiter.message(principal):
+            await message.reply_text("Слишком много запросов. Попробуйте через минуту.")
+            return
         if reminder_service is not None:
             try:
                 reminder_response = await asyncio.to_thread(
@@ -424,7 +577,8 @@ async def handle_text(
         try:
             ask_kwargs = dict(user_id=user_id, chat_id=chat_id,
                               source_message_id=getattr(message, "message_id", None),
-                              is_allowlisted=(user_id in context.application.bot_data["config"].telegram_allowed_user_ids))
+                              is_allowlisted=bool(principal and principal.role == OWNER),
+                              principal=principal)
             thread_id = getattr(message, "message_thread_id", None)
             reply_to = getattr(getattr(message, "reply_to_message", None), "message_id", None)
             if thread_id is not None: ask_kwargs["thread_id"] = thread_id

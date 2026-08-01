@@ -108,6 +108,9 @@ def test_text_handler_sends_ai_response() -> None:
     context.application.bot_data["agent"].ask.assert_awaited_once_with(
         "Hello", user_id=123, chat_id=456, source_message_id=None,
         is_allowlisted=True,
+        principal=__import__("app.access", fromlist=["Principal"]).Principal(
+            123, "owner", "active"
+        ),
     )
     update.effective_message.reply_text.assert_awaited_once_with("AI answer")
 
@@ -175,7 +178,7 @@ def test_authorize_denies_unknown_user() -> None:
         asyncio.run(authorize(update, context))
 
     update.effective_message.reply_text.assert_awaited_once_with(
-        "Доступ запрещён."
+        "Доступ к этому боту предоставляется только по приглашению владельца."
     )
 
 
@@ -205,7 +208,7 @@ def test_telegram_send_failure_is_logged(
     assert "Telegram send failed" not in caplog.text
 
 
-def test_authorize_allows_explicit_public_access() -> None:
+def test_authorize_does_not_grant_principal_from_public_flag() -> None:
     update = make_update()
     context = make_context()
     context.application.bot_data["config"] = SimpleNamespace(
@@ -213,9 +216,10 @@ def test_authorize_allows_explicit_public_access() -> None:
         telegram_allowed_user_ids=frozenset(),
     )
 
-    asyncio.run(authorize(update, context))
-
-    update.effective_message.reply_text.assert_not_awaited()
+    from telegram.ext import ApplicationHandlerStop
+    with pytest.raises(ApplicationHandlerStop):
+        asyncio.run(authorize(update, context))
+    update.effective_message.reply_text.assert_awaited_once()
 
 
 def test_text_handler_rejects_empty_message() -> None:

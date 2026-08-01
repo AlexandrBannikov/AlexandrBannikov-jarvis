@@ -90,6 +90,26 @@ class MemoryService:
         records=self.recall(owner_id,query,limit=self.context_builder.max_items)
         return self.context_builder.build(records,self.storage.list_projects(owner_id))
 
+    def build_family_user_context(self, owner_id: int, query: str = "") -> str:
+        records = self.storage.list_family_safe(owner_id)
+        terms = {x for x in re.findall(r"[\w-]{3,}", query.casefold())}
+        if terms:
+            records = [record for record in records if terms & set(re.findall(
+                r"[\w-]{3,}", f"{record.summary} {record.content}".casefold()))]
+        records = records[:self.context_builder.max_items]
+        self.storage.mark_used((record.id for record in records), owner_id)
+        return self.context_builder.build(records, [])
+
+    def remember_family(self, text: str) -> MemoryRecord:
+        key = "family-" + __import__("hashlib").sha256(
+            text.encode("utf-8")
+        ).hexdigest()[:24]
+        return self.remember(
+            owner_id=0, scope="user_preference", namespace="family", key=key,
+            value=text, summary=text[:500], source="explicit_family",
+            confidence=1.0, importance=7,
+        )
+
     def extract_and_remember(self, owner_id: int, text: str,
                              project_hint: str="jarvis") -> list[MemoryRecord]:
         if not self.auto_extract_enabled or contains_secret(text):

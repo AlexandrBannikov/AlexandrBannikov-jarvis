@@ -29,6 +29,9 @@ from app.handlers import (
     tools_command,
     handle_location, location_callback, location_command, timezone_command,
     clear_location_command,
+    invite_family_command, family_users_command, disable_family_user_command,
+    enable_family_user_command, remove_family_user_command,
+    revoke_family_invite_command,
 )
 from app.memory import MemoryManager, MemoryStorage
 from app.memory.tools import register_memory_tools
@@ -42,6 +45,8 @@ from app.tools import create_default_tool_manager
 from app.ssh_agent.bootstrap import build_ssh_dependencies
 from app.location import LocationService, LocationStorage
 from app.location.tool import GetUserLocationTool
+from app.access import AccessStorage, CapabilityPolicy, RateLimiter
+from app.health import set_family_access_health_provider
 
 logger = logging.getLogger(__name__)
 
@@ -89,6 +94,14 @@ def build_application(config: Config) -> Application:
         .build()
     )
     application.bot_data["config"] = config
+    access_storage = AccessStorage(config.access_db_path)
+    access_storage.initialize(config.telegram_allowed_user_ids)
+    capability_policy = CapabilityPolicy()
+    rate_limiter = RateLimiter()
+    application.bot_data["access_storage"] = access_storage
+    application.bot_data["capability_policy"] = capability_policy
+    application.bot_data["rate_limiter"] = rate_limiter
+    set_family_access_health_provider(access_storage)
     ai_client = AIClient(config)
     application.bot_data["ai_client"] = ai_client
     tool_manager = create_default_tool_manager(
@@ -153,6 +166,7 @@ def build_application(config: Config) -> Application:
                 application.bot,
                 config.telegram_allowed_user_ids,
                 enabled=config.reminders_delivery_enabled,
+                access_storage=access_storage,
             ),
             poll_interval=config.reminders_poll_interval_seconds,
             lease_seconds=config.reminders_lease_seconds,
@@ -196,6 +210,8 @@ def build_application(config: Config) -> Application:
         memory_manager=memory_manager,
         conversation_manager=conversation_manager,
         location_service=location_service,
+        capability_policy=capability_policy,
+        rate_limiter=rate_limiter,
     )
     application.bot_data["user_locks"] = {}
     application.add_handler(
@@ -219,6 +235,12 @@ def build_application(config: Config) -> Application:
     application.add_handler(CommandHandler("location", location_command))
     application.add_handler(CommandHandler("timezone", timezone_command))
     application.add_handler(CommandHandler("clear_location", clear_location_command))
+    application.add_handler(CommandHandler("invite_family", invite_family_command))
+    application.add_handler(CommandHandler("family_users", family_users_command))
+    application.add_handler(CommandHandler("disable_family_user", disable_family_user_command))
+    application.add_handler(CommandHandler("enable_family_user", enable_family_user_command))
+    application.add_handler(CommandHandler("remove_family_user", remove_family_user_command))
+    application.add_handler(CommandHandler("revoke_family_invite", revoke_family_invite_command))
     application.add_handler(CallbackQueryHandler(location_callback, pattern=r"^location:(save|discard):[A-Za-z0-9_-]{8,16}$"))
     application.add_handler(MessageHandler(filters.LOCATION, handle_location))
     application.add_handler(

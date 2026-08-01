@@ -60,6 +60,8 @@ class Config:
     conversation_db_path: Path = Path("/var/lib/jarvis/conversations.db")
     location_enabled: bool = False
     location_db_path: Path = Path("/var/lib/jarvis/location.db")
+    access_db_path: Path = Path("/var/lib/jarvis/access.db")
+    family_invite_ttl_seconds: int = 86400
 
 
 def _parse_boolean(value: str, name: str) -> bool:
@@ -302,4 +304,9 @@ def load_config(environment: Mapping[str, str] | None = None) -> Config:
         conversation_db_path=Path(values.get("CONVERSATION_DB_PATH", "/var/lib/jarvis/conversations.db").strip() or "/var/lib/jarvis/conversations.db"),
         location_enabled=_parse_boolean(values.get("LOCATION_ENABLED", "true"), "LOCATION_ENABLED"),
         location_db_path=Path(values.get("LOCATION_DB_PATH", "/var/lib/jarvis/location.db").strip() or "/var/lib/jarvis/location.db"),
+        access_db_path=Path(values.get("ACCESS_DB_PATH", "/var/lib/jarvis/access.db").strip() or "/var/lib/jarvis/access.db"),
+        family_invite_ttl_seconds=_parse_bounded_int(
+            values.get("FAMILY_INVITE_TTL_SECONDS", "86400"),
+            "FAMILY_INVITE_TTL_SECONDS", 300, 604800,
+        ),
     )
