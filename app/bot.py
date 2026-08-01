@@ -219,7 +219,7 @@ def build_application(config: Config) -> Application:
     application.add_handler(CommandHandler("location", location_command))
     application.add_handler(CommandHandler("timezone", timezone_command))
     application.add_handler(CommandHandler("clear_location", clear_location_command))
-    application.add_handler(CallbackQueryHandler(location_callback, pattern=r"^location:(save|discard)$"))
+    application.add_handler(CallbackQueryHandler(location_callback, pattern=r"^location:(save|discard):[A-Za-z0-9_-]{8,16}$"))
     application.add_handler(MessageHandler(filters.LOCATION, handle_location))
     application.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text)

@@ -8,6 +8,7 @@ import json
 import logging
 import platform
 import socket
+import secrets
 import time
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -330,18 +331,21 @@ async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     except Exception:
         logger.exception("Location resolution failed")
         await message.reply_text("Сервис определения местоположения временно недоступен."); return
-    context.application.bot_data["pending_locations"][user.id]=item
+    nonce=secrets.token_urlsafe(8)
+    context.application.bot_data["pending_locations"][user.id]=(nonce,item)
     city=item.city or "не удалось определить"; country=f"\nСтрана:\n{item.country}" if item.country else ""
     text=(f"Получил ваше местоположение.\n\nГород:\n{city}{country}\n\nЧасовой пояс:\n{item.timezone}\n\nUTC:\n{_utc_offset(item.timezone)}\n\nСохранить это местоположение?")
-    keyboard=InlineKeyboardMarkup([[InlineKeyboardButton("✅ Сохранить",callback_data="location:save"),InlineKeyboardButton("❌ Не сохранять",callback_data="location:discard")]])
+    keyboard=InlineKeyboardMarkup([[InlineKeyboardButton("✅ Сохранить",callback_data=f"location:save:{nonce}"),InlineKeyboardButton("❌ Не сохранять",callback_data=f"location:discard:{nonce}")]])
     await message.reply_text(text,reply_markup=keyboard)
 
 async def location_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query,user=update.callback_query,update.effective_user
     if query is None or user is None:return
-    await query.answer(); item=context.application.bot_data["pending_locations"].pop(user.id,None)
-    if query.data=="location:discard":await query.edit_message_text("Местоположение не сохранено.");return
-    if query.data!="location:save" or item is None:await query.edit_message_text("Запрос устарел. Отправьте геопозицию ещё раз.");return
+    await query.answer(); parts=(query.data or "").split(":",2); pending=context.application.bot_data["pending_locations"].get(user.id)
+    if len(parts)!=3 or pending is None or parts[2]!=pending[0]:await query.edit_message_text("Запрос устарел. Отправьте геопозицию ещё раз.");return
+    action, item=parts[1],pending[1];context.application.bot_data["pending_locations"].pop(user.id,None)
+    if action=="discard":await query.edit_message_text("Местоположение не сохранено.");return
+    if action!="save":await query.edit_message_text("Запрос устарел. Отправьте геопозицию ещё раз.");return
     await asyncio.to_thread(context.application.bot_data["location_service"].save,user.id,item)
     await query.edit_message_text("Местоположение сохранено.")
 
