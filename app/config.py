@@ -58,6 +58,8 @@ class Config:
     conversation_state_ttl_minutes: int = 60
     conversation_history_max_messages: int = 20
     conversation_db_path: Path = Path("/var/lib/jarvis/conversations.db")
+    location_enabled: bool = False
+    location_db_path: Path = Path("/var/lib/jarvis/location.db")
 
 
 def _parse_boolean(value: str, name: str) -> bool:
@@ -298,4 +300,6 @@ def load_config(environment: Mapping[str, str] | None = None) -> Config:
         conversation_state_ttl_minutes=_parse_bounded_int(values.get("CONVERSATION_STATE_TTL_MINUTES", "60"), "CONVERSATION_STATE_TTL_MINUTES", 5, 1440),
         conversation_history_max_messages=_parse_bounded_int(values.get("CONVERSATION_HISTORY_MAX_MESSAGES", "20"), "CONVERSATION_HISTORY_MAX_MESSAGES", 4, 100),
         conversation_db_path=Path(values.get("CONVERSATION_DB_PATH", "/var/lib/jarvis/conversations.db").strip() or "/var/lib/jarvis/conversations.db"),
+        location_enabled=_parse_boolean(values.get("LOCATION_ENABLED", "true"), "LOCATION_ENABLED"),
+        location_db_path=Path(values.get("LOCATION_DB_PATH", "/var/lib/jarvis/location.db").strip() or "/var/lib/jarvis/location.db"),
     )

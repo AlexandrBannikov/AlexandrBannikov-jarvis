@@ -2,7 +2,7 @@
 
 import logging
 
-from telegram.ext import Application, CommandHandler, MessageHandler, filters
+from telegram.ext import Application, CallbackQueryHandler, CommandHandler, MessageHandler, filters
 
 from app.ai.client import AIClient
 from app.ai.agent import JarvisAgent
@@ -27,17 +27,21 @@ from app.handlers import (
     reset_context_command,
     telegram_error_handler,
     tools_command,
+    handle_location, location_callback, location_command, timezone_command,
+    clear_location_command,
 )
 from app.memory import MemoryManager, MemoryStorage
 from app.memory.tools import register_memory_tools
 from app.reminders import ReminderScheduler, ReminderService, ReminderStorage
 from app.reminders.delivery import ReminderDelivery
 from app.reminders.tools import register_reminder_tools
-from app.health import set_reminder_health_provider, set_ssh_health_provider, set_skill_health_provider, set_conversation_health_provider
+from app.health import set_reminder_health_provider, set_ssh_health_provider, set_skill_health_provider, set_conversation_health_provider, set_location_health_provider
 from app.skills.builtin import build_skill_registry
 from app.conversation import ConversationManager, ConversationStorage
 from app.tools import create_default_tool_manager
 from app.ssh_agent.bootstrap import build_ssh_dependencies
+from app.location import LocationService, LocationStorage
+from app.location.tool import GetUserLocationTool
 
 logger = logging.getLogger(__name__)
 
@@ -113,6 +117,13 @@ def build_application(config: Config) -> Application:
         ))
     application.bot_data["conversation_manager"] = conversation_manager
     set_conversation_health_provider(conversation_manager.storage if conversation_manager else None)
+    location_service = None
+    if config.location_enabled:
+        location_service = LocationService(LocationStorage(config.location_db_path))
+        tool_manager.registry.register(GetUserLocationTool(location_service))
+    application.bot_data["location_service"] = location_service
+    application.bot_data["pending_locations"] = {}
+    set_location_health_provider(location_service.storage if location_service else None)
     ssh_dependencies = build_ssh_dependencies(
         enabled=config.ssh_enabled,
         config_path=config.ssh_servers_config_path,
@@ -163,6 +174,7 @@ def build_application(config: Config) -> Application:
         reminder_service=reminder_service,
         reminder_scheduler=reminder_scheduler,
         ssh_dependencies=ssh_dependencies,
+        location_service=location_service,
     )
     required_errors = skill_registry.required_errors()
     if required_errors:
@@ -183,6 +195,7 @@ def build_application(config: Config) -> Application:
         web_search_context_size=config.web_search_context_size,
         memory_manager=memory_manager,
         conversation_manager=conversation_manager,
+        location_service=location_service,
     )
     application.bot_data["user_locks"] = {}
     application.add_handler(
@@ -203,6 +216,11 @@ def build_application(config: Config) -> Application:
     application.add_handler(CommandHandler("memory_projects", memory_projects_command))
     application.add_handler(CommandHandler("memory_forget", memory_forget_command))
     application.add_handler(CommandHandler("memory_status", memory_status_command))
+    application.add_handler(CommandHandler("location", location_command))
+    application.add_handler(CommandHandler("timezone", timezone_command))
+    application.add_handler(CommandHandler("clear_location", clear_location_command))
+    application.add_handler(CallbackQueryHandler(location_callback, pattern=r"^location:(save|discard)$"))
+    application.add_handler(MessageHandler(filters.LOCATION, handle_location))
     application.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text)
     )

@@ -106,6 +106,7 @@ class JarvisAgent:
         web_search_context_size: str = "medium",
         memory_manager: MemoryManager | None = None,
         conversation_manager: ConversationManager | None = None,
+        location_service: object | None = None,
     ) -> None:
         if max_tool_rounds < 1:
             raise ValueError("max_tool_rounds must be positive")
@@ -118,6 +119,7 @@ class JarvisAgent:
         self.web_search_context_size = web_search_context_size
         self.memory_manager = memory_manager
         self.conversation_manager = conversation_manager
+        self.location_service = location_service
 
     async def ask(
         self,
@@ -166,6 +168,9 @@ class JarvisAgent:
             return WEB_SEARCH_SECRET_MESSAGE
         try:
             instructions = JARVIS_SYSTEM_PROMPT
+            if self.location_service is not None and user_id is not None:
+                location_context = await self._run_sync(self.location_service.context, user_id)
+                if location_context: instructions += "\n\n" + location_context
             conversation_key = None
             active_conversation = False
             conversation_input: list[dict[str, str]] | None = None
@@ -539,6 +544,8 @@ class JarvisAgent:
                 "forget_memory", "update_project_memory",
                 "get_project_memory_status",
             }:
+                execution_arguments["trusted_owner_id"] = user_id or 0
+            if tool_name == "get_user_location":
                 execution_arguments["trusted_owner_id"] = user_id or 0
             tool = self.tool_manager.registry.get(tool_name)
             if isinstance(tool, SSHServiceTool):

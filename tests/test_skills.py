@@ -89,6 +89,6 @@ def test_health_payload_contains_only_skill_summary(tmp_path) -> None:
     registry = build_skill_registry(manager.registry, config(), memory_manager=None)
     set_skill_health_provider(registry)
     payload = health_payload()
-    assert payload["skills"]["total"] == 5
+    assert payload["skills"]["total"] == 6
     assert "token" not in str(payload)
     set_skill_health_provider(None)

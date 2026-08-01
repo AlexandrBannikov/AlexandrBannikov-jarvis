@@ -14,6 +14,7 @@ dependencies = [
     "python-dotenv",
     "paramiko",
     "PyYAML",
+    "timezonefinder",
 ]
 
 [project.optional-dependencies]

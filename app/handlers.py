@@ -10,7 +10,7 @@ import platform
 import socket
 import time
 
-from telegram import Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ChatAction
 from telegram.ext import ApplicationHandlerStop, ContextTypes
 
@@ -21,6 +21,8 @@ from app.ai.provider import (
     LLMTimeoutError,
 )
 from app.reminders.service import ReminderError
+from app.location.models import LocationCandidate
+from zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
 START_MESSAGE = "Привет.\nЯ Jarvis.\nСистема запущена."
@@ -40,6 +42,9 @@ HELP_MESSAGE = (
     "\n/memory_forget <id> — забыть принадлежащую вам запись"
     "\n/conversation — показать текущую тему"
     "\n/reset_context — начать текущий диалог заново"
+    "\n/location — показать подтверждённое местоположение"
+    "\n/timezone — показать часовой пояс и местное время"
+    "\n/clear_location — удалить местоположение"
 )
 PROCESS_STARTED_AT = time.monotonic()
 MAX_INPUT_LENGTH = 4_000
@@ -309,6 +314,57 @@ async def memory_forget_command(update: Update, context: ContextTypes.DEFAULT_TY
     await message.reply_text("Запись забыта." if forgotten else
                              "Запись не найдена или принадлежит другому пользователю.")
 
+
+def _utc_offset(name: str) -> str:
+    offset=datetime.now(ZoneInfo(name)).utcoffset(); seconds=int(offset.total_seconds()) if offset else 0
+    sign="+" if seconds>=0 else "-"; hours,remainder=divmod(abs(seconds),3600)
+    return f"{sign}{hours:02d}:{remainder//60:02d}"
+
+async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message,user=update.effective_message,update.effective_user
+    service=context.application.bot_data.get("location_service")
+    if message is None or user is None or getattr(message,"location",None) is None:return
+    if service is None: await message.reply_text("Поддержка местоположения отключена."); return
+    try: item=await asyncio.to_thread(service.resolve,message.location.latitude,message.location.longitude)
+    except (ValueError,LookupError): await message.reply_text("Не удалось определить часовой пояс для этих координат."); return
+    except Exception:
+        logger.exception("Location resolution failed")
+        await message.reply_text("Сервис определения местоположения временно недоступен."); return
+    context.application.bot_data["pending_locations"][user.id]=item
+    city=item.city or "не удалось определить"; country=f"\nСтрана:\n{item.country}" if item.country else ""
+    text=(f"Получил ваше местоположение.\n\nГород:\n{city}{country}\n\nЧасовой пояс:\n{item.timezone}\n\nUTC:\n{_utc_offset(item.timezone)}\n\nСохранить это местоположение?")
+    keyboard=InlineKeyboardMarkup([[InlineKeyboardButton("✅ Сохранить",callback_data="location:save"),InlineKeyboardButton("❌ Не сохранять",callback_data="location:discard")]])
+    await message.reply_text(text,reply_markup=keyboard)
+
+async def location_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query,user=update.callback_query,update.effective_user
+    if query is None or user is None:return
+    await query.answer(); item=context.application.bot_data["pending_locations"].pop(user.id,None)
+    if query.data=="location:discard":await query.edit_message_text("Местоположение не сохранено.");return
+    if query.data!="location:save" or item is None:await query.edit_message_text("Запрос устарел. Отправьте геопозицию ещё раз.");return
+    await asyncio.to_thread(context.application.bot_data["location_service"].save,user.id,item)
+    await query.edit_message_text("Местоположение сохранено.")
+
+async def location_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message,user=update.effective_message,update.effective_user; service=context.application.bot_data.get("location_service")
+    if message is None or user is None:return
+    item=service.get(user.id) if service else None
+    if not item:await message.reply_text("Сохранённого местоположения нет. Отправьте геопозицию Telegram.");return
+    await message.reply_text(f"Ваше местоположение:\n\nГород:\n{item.city or 'не определён'}\n\nTimezone:\n{item.timezone}\n\nUTC:\n{_utc_offset(item.timezone)}\n\nОбновлено:\n{item.updated_at} UTC")
+
+async def timezone_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message,user=update.effective_message,update.effective_user; service=context.application.bot_data.get("location_service")
+    if message is None or user is None:return
+    item=service.get(user.id) if service else None
+    if not item:await message.reply_text("Часовой пояс не настроен. Отправьте геопозицию Telegram.");return
+    await message.reply_text(f"Ваш часовой пояс:\n\n{item.timezone}\n\nМестное время:\n{datetime.now(ZoneInfo(item.timezone)).strftime('%H:%M')}")
+
+async def clear_location_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message,user=update.effective_message,update.effective_user; service=context.application.bot_data.get("location_service")
+    if message is None or user is None:return
+    context.application.bot_data["pending_locations"].pop(user.id,None)
+    removed=service.clear(user.id) if service else False
+    await message.reply_text("Местоположение удалено." if removed else "Сохранённого местоположения нет.")
 
 async def handle_text(
     update: Update, context: ContextTypes.DEFAULT_TYPE

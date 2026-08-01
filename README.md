@@ -3,7 +3,8 @@
 Jarvis — персональный AI-ассистент для управления инфраструктурой пользователя.
 
 Jarvis работает как Telegram-бот с командами `/start`, `/help`, `/ping`,
-`/status`, `/tools` и диагностической командой `/tool`. Обычные текстовые
+`/status`, `/tools`, `/location`, `/timezone`, `/clear_location` и
+диагностической командой `/tool`. Обычные текстовые
 сообщения обрабатывает ограниченный `JarvisAgent` через OpenAI Responses API.
 Модель может выбирать только зарегистрированные read-only инструменты;
 произвольные shell-команды ей не предоставляются.
@@ -393,7 +394,11 @@ Registry не заменяет выполнение tools, SSH Agent Registry, m
 scheduler.
 
 В production регистрируются только встроенные capabilities: `core`, `memory`,
-`reminders`, `ssh` и `web_search`. Источники ограничены `builtin` и
+`reminders`, `ssh`, `web_search` и `location`. Location сохраняет только
+последнюю явно подтверждённую геопозицию текущего Telegram user ID в отдельной
+SQLite-базе. Он не создаёт Memory-факты, не ведёт GPS tracking или историю
+перемещений. Подробности: [docs/LOCATION.md](docs/LOCATION.md).
+Источники ограничены `builtin` и
 `production`; пользовательские plugins, module paths, directory scanning,
 dynamic import, shell и package installation не поддерживаются.
 
