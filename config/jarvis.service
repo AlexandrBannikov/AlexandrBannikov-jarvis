@@ -18,6 +18,7 @@ ProtectSystem=strict
 ProtectHome=true
 ReadWritePaths=/opt/jarvis/logs /opt/jarvis/data
 StateDirectory=jarvis
+StateDirectoryMode=0700
 ReadOnlyPaths=-/etc/jarvis/hosts.yaml -/etc/jarvis/known_hosts -/etc/jarvis/keys
 UMask=0077
 

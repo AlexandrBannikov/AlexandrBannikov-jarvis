@@ -22,6 +22,7 @@ def paths_for(tmp_path: Path) -> rollout.RolloutPaths:
                 "ProtectSystem=strict",
                 "ProtectHome=true",
                 "ReadWritePaths=/opt/jarvis/logs /opt/jarvis/data",
+                "StateDirectoryMode=0700",
                 "EnvironmentFile=/etc/jarvis/jarvis.env",
             ]
         ),
@@ -32,6 +33,21 @@ def paths_for(tmp_path: Path) -> rollout.RolloutPaths:
         etc_dir=tmp_path / "etc/jarvis",
         systemd_dir=tmp_path / "systemd",
     )
+
+
+def test_systemd_hardening_requires_private_state_directory(
+    tmp_path: Path,
+) -> None:
+    paths = paths_for(tmp_path)
+    unit = paths.source_unit
+    unit.write_text(
+        unit.read_text(encoding="utf-8").replace(
+            "StateDirectoryMode=0700\n", ""
+        ),
+        encoding="utf-8",
+    )
+
+    assert not rollout._unit_is_hardened(unit)
 
 
 def write_valid_environment(paths: rollout.RolloutPaths) -> None:

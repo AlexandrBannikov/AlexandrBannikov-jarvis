@@ -293,6 +293,7 @@ def _unit_is_hardened(path: Path) -> bool:
         "ProtectSystem=strict",
         "ProtectHome=true",
         "ReadWritePaths=/opt/jarvis/logs /opt/jarvis/data",
+        "StateDirectoryMode=0700",
         "EnvironmentFile=/etc/jarvis/jarvis.env",
     )
     return all(item in content for item in required)
