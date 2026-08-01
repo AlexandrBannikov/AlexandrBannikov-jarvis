@@ -183,6 +183,8 @@ class OpenAIProvider(LLMProvider):
         if tools is not None:
             request["tools"] = tools
             request["tool_choice"] = tool_choice
+            if any(tool.get("type") == "web_search" for tool in tools):
+                request["include"] = ["web_search_call.action.sources"]
         if previous_response_id:
             request["previous_response_id"] = previous_response_id
         return self._create(**request)

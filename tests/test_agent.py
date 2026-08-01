@@ -259,7 +259,7 @@ def test_human_limit_message_avoids_internal_vocabulary_and_backticks() -> None:
     assert "`" not in PROCESS_UNAVAILABLE_MESSAGE
 
 
-def test_web_search_is_offered_but_not_required_for_ordinary_question() -> None:
+def test_web_search_is_not_offered_for_ordinary_question() -> None:
     provider = FakeProvider([response("r1", text="systemd — менеджер служб.")])
 
     answer = asyncio.run(
@@ -272,7 +272,7 @@ def test_web_search_is_offered_but_not_required_for_ordinary_question() -> None:
     )
 
     assert answer == "systemd — менеджер служб."
-    assert any(
+    assert not any(
         tool["type"] == "web_search"
         for tool in provider.requests[0]["tools"]
     )
@@ -338,6 +338,71 @@ def test_web_search_formats_multiple_unique_sources() -> None:
 
     assert answer.count("https://example.com/a") == 1
     assert "2. Источник B — https://example.org/b" in answer
+
+
+def test_web_search_uses_retrieved_sources_when_citations_are_absent() -> None:
+    provider = FakeProvider([
+        SimpleNamespace(
+            id="r1",
+            output_text="Погода ясная.",
+            output=[
+                {
+                    "type": "web_search_call",
+                    "status": "completed",
+                    "action": {
+                        "sources": [
+                            {"title": "Прогноз", "url": "https://example.com/weather"}
+                        ]
+                    },
+                },
+                {"type": "message", "content": [{"annotations": []}]},
+            ],
+        )
+    ])
+
+    answer = asyncio.run(
+        JarvisAgent(
+            provider,
+            manager(),
+            run_sync=run_immediately,
+            web_search_enabled=True,
+        ).ask("Какая сегодня погода в Москве?")
+    )
+
+    assert "Погода ясная." in answer
+    assert "https://example.com/weather" in answer
+
+
+def test_web_search_accepts_official_realtime_weather_feed() -> None:
+    provider = FakeProvider([
+        SimpleNamespace(
+            id="r1",
+            output_text="Погода ясная.",
+            output=[
+                {
+                    "type": "web_search_call",
+                    "status": "completed",
+                    "action": {
+                        "sources": [
+                            {"type": "api", "name": "oai-weather", "url": None}
+                        ]
+                    },
+                },
+                {"type": "message", "content": [{"annotations": []}]},
+            ],
+        )
+    ])
+
+    answer = asyncio.run(
+        JarvisAgent(
+            provider,
+            manager(),
+            run_sync=run_immediately,
+            web_search_enabled=True,
+        ).ask("Какая сегодня погода в Москве?")
+    )
+
+    assert answer == "Погода ясная.\n\nИсточники:\n1. oai-weather"
 
 
 def test_web_search_logs_only_safe_metrics(
@@ -486,7 +551,7 @@ def test_search_failure_can_fall_back_for_stable_question() -> None:
             manager(),
             run_sync=run_immediately,
             web_search_enabled=True,
-        ).ask("Объясни арифметику")
+        ).ask("Какая последняя версия Python?")
     )
 
     assert answer == "Стабильный ответ без поиска."
@@ -494,6 +559,66 @@ def test_search_failure_can_fall_back_for_stable_question() -> None:
         tool["type"] != "web_search"
         for tool in provider.requests[1]["tools"]
     )
+
+
+@pytest.mark.parametrize(
+    "question",
+    ["Привет", "Алло", "Как дела", "Спасибо", "2+2", "Что такое SSH?", "Расскажи про Москву"],
+)
+def test_ordinary_dialogue_never_receives_web_search(question: str) -> None:
+    provider = FakeProvider([response("r1", text="Обычный ответ.")])
+
+    answer = asyncio.run(
+        JarvisAgent(
+            provider,
+            manager(),
+            run_sync=run_immediately,
+            web_search_enabled=True,
+        ).ask(question)
+    )
+
+    assert answer == "Обычный ответ."
+    assert all(tool["type"] != "web_search" for tool in provider.requests[0]["tools"])
+
+
+def test_weather_without_location_requests_location() -> None:
+    provider = FakeProvider([])
+    location = Mock()
+    location.context.return_value = None
+
+    answer = asyncio.run(
+        JarvisAgent(
+            provider,
+            manager(),
+            run_sync=run_immediately,
+            web_search_enabled=True,
+            location_service=location,
+        ).ask("Какая сегодня погода?", user_id=123)
+    )
+
+    assert answer == "Отправьте вашу геопозицию Telegram, чтобы я мог уточнить погоду."
+    assert provider.requests == []
+
+
+def test_weather_with_location_receives_web_search() -> None:
+    provider = FakeProvider([
+        web_response("r1", "Погода ясная.", [("Прогноз", "https://example.com/weather")])
+    ])
+    location = Mock()
+    location.context.return_value = "Confirmed user location: Moscow."
+
+    answer = asyncio.run(
+        JarvisAgent(
+            provider,
+            manager(),
+            run_sync=run_immediately,
+            web_search_enabled=True,
+            location_service=location,
+        ).ask("Погода для моей геопозиции", user_id=123)
+    )
+
+    assert "Погода ясная." in answer
+    assert any(tool["type"] == "web_search" for tool in provider.requests[0]["tools"])
 
 
 def test_one_tool_call_uses_matching_call_id_and_previous_response() -> None:

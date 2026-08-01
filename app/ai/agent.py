@@ -46,6 +46,9 @@ WEB_SEARCH_DISABLED_MESSAGE = "Поиск в интернете сейчас о�
 WEB_SEARCH_UNAVAILABLE_MESSAGE = (
     "Веб-поиск временно недоступен. Попробуйте позже."
 )
+LOCATION_REQUIRED_MESSAGE = (
+    "Отправьте вашу геопозицию Telegram, чтобы я мог уточнить погоду."
+)
 WEB_SEARCH_UNSUPPORTED_MESSAGE = (
     "Текущая модель не поддерживает веб-поиск."
 )
@@ -72,6 +75,16 @@ _EXPLICIT_WEB_SEARCH = re.compile(
     r"(?i)\b(?:найди(?:те)?\s+в\s+интернете|поищи(?:те)?|"
     r"проверь(?:те)?\s+актуальн|что\s+нового|какая\s+сейчас\s+версия|"
     r"последн(?:ие|яя|юю)\s+новост)"
+)
+_CURRENT_INFORMATION = re.compile(
+    r"(?i)\b(?:сегодня|сейчас|текущ(?:ий|ая|ее|ие)|актуальн|"
+    r"последн(?:ий|яя|ее|ие|юю)|новост|погод|прогноз|курс|цен[аы]|"
+    r"расписани|результат(?:ы)?\s+матч)"
+)
+_WEATHER_REQUEST = re.compile(r"(?i)\b(?:погод|прогноз)\w*")
+_WEATHER_WITH_PLACE = re.compile(
+    r"(?i)\b(?:погод|прогноз)\w*\s+(?:в|во|для)\s+"
+    r"(?!мо(?:ей|его)\s+геопозиц)"
 )
 
 
@@ -148,6 +161,9 @@ class JarvisAgent:
         )
         contains_secret = self._contains_potential_secret(user_text)
         explicit_search = bool(_EXPLICIT_WEB_SEARCH.search(user_text))
+        current_information = bool(_CURRENT_INFORMATION.search(user_text))
+        search_required = explicit_search or current_information
+        weather_request = bool(_WEATHER_REQUEST.search(user_text))
         if explicit_search and not self.web_search_enabled:
             audit_logger.info(
                 "agent_request_finished user_id=%s tool_rounds=0 "
@@ -168,9 +184,22 @@ class JarvisAgent:
             return WEB_SEARCH_SECRET_MESSAGE
         try:
             instructions = JARVIS_SYSTEM_PROMPT
+            location_context = None
             if self.location_service is not None and user_id is not None:
                 location_context = await self._run_sync(self.location_service.context, user_id)
                 if location_context: instructions += "\n\n" + location_context
+            if (
+                weather_request
+                and not location_context
+                and not _WEATHER_WITH_PLACE.search(user_text)
+            ):
+                error_type = "location_missing"
+                audit_logger.info(
+                    "agent_routing user_id=%s tool_selected=none "
+                    "tool_skipped=web_search fallback_reason=location_missing",
+                    user_id,
+                )
+                return LOCATION_REQUIRED_MESSAGE
             conversation_key = None
             active_conversation = False
             conversation_input: list[dict[str, str]] | None = None
@@ -203,9 +232,17 @@ class JarvisAgent:
                 )
                 if memory_context and not active_conversation:
                     instructions += "\n\n" + memory_context
+            allow_web = search_required and not contains_secret
+            audit_logger.info(
+                "agent_routing user_id=%s tool_selected=%s "
+                "tool_skipped=%s fallback_reason=none",
+                user_id,
+                "web_search" if self.web_search_enabled and allow_web else "model_auto",
+                "none" if self.web_search_enabled and allow_web else "web_search",
+            )
             response = await self._create_response(
                 input_items=conversation_input or [{"role": "user", "content": user_text}],
-                tools=self._tool_schemas(allow_web=not contains_secret),
+                tools=self._tool_schemas(allow_web=allow_web),
                 tool_choice="auto",
                 instructions=instructions,
             )
@@ -296,7 +333,7 @@ class JarvisAgent:
                 response = await self._create_response(
                     input_items=outputs,
                     tools=self._tool_schemas(
-                        allow_web=not contains_secret
+                        allow_web=allow_web
                     ),
                     tool_choice="auto",
                     previous_response_id=raw_response_id,
@@ -304,6 +341,11 @@ class JarvisAgent:
                 )
         except LLMWebSearchUnsupportedError:
             error_type = "web_search_unsupported"
+            audit_logger.info(
+                "agent_routing user_id=%s tool_failed=web_search "
+                "fallback_reason=web_search_unsupported",
+                user_id,
+            )
             self._log_web_search(
                 status="unsupported",
                 sources=0,
@@ -312,6 +354,11 @@ class JarvisAgent:
             return WEB_SEARCH_UNSUPPORTED_MESSAGE
         except LLMWebSearchUnavailableError:
             error_type = "web_search_unavailable"
+            audit_logger.info(
+                "agent_routing user_id=%s tool_failed=web_search "
+                "fallback_reason=web_search_unavailable",
+                user_id,
+            )
             self._log_web_search(
                 status="unavailable",
                 sources=0,
@@ -430,7 +477,42 @@ class JarvisAgent:
     def _web_sources(response: object) -> list[tuple[str, str]]:
         sources: list[tuple[str, str]] = []
         seen: set[str] = set()
+
+        def add_source(source: object) -> None:
+            raw_url = str(_item_value(source, "url", "") or "")
+            source_type = str(_item_value(source, "type", "") or "")
+            source_name = str(_item_value(source, "name", "") or "")
+            if not raw_url and source_type == "api" and source_name in {
+                "oai-weather",
+                "oai-finance",
+                "oai-sports",
+            }:
+                if source_name not in seen:
+                    seen.add(source_name)
+                    sources.append((source_name, ""))
+                return
+            title = str(
+                _item_value(source, "title", "Источник") or "Источник"
+            ).strip()
+            try:
+                parsed = urlsplit(raw_url)
+            except ValueError as error:
+                raise CitationParsingError from error
+            if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+                raise CitationParsingError
+            url = urlunsplit(
+                (parsed.scheme, parsed.netloc, parsed.path, parsed.query, "")
+            )
+            if url not in seen:
+                seen.add(url)
+                sources.append((title[:200], url))
+
         for item in (getattr(response, "output", None) or []):
+            if _item_value(item, "type") == "web_search_call":
+                action = _item_value(item, "action", {})
+                for source in (_item_value(action, "sources", []) or []):
+                    add_source(source)
+                continue
             if _item_value(item, "type") != "message":
                 continue
             for content in (_item_value(item, "content", []) or []):
@@ -442,32 +524,7 @@ class JarvisAgent:
                     citation = _item_value(
                         annotation, "url_citation", annotation
                     )
-                    raw_url = str(_item_value(citation, "url", "") or "")
-                    title = str(
-                        _item_value(citation, "title", "Источник")
-                        or "Источник"
-                    ).strip()
-                    try:
-                        parsed = urlsplit(raw_url)
-                    except ValueError as error:
-                        raise CitationParsingError from error
-                    if (
-                        parsed.scheme not in {"http", "https"}
-                        or not parsed.netloc
-                    ):
-                        raise CitationParsingError
-                    url = urlunsplit(
-                        (
-                            parsed.scheme,
-                            parsed.netloc,
-                            parsed.path,
-                            parsed.query,
-                            "",
-                        )
-                    )
-                    if url not in seen:
-                        seen.add(url)
-                        sources.append((title[:200], url))
+                    add_source(citation)
         return sources
 
     @staticmethod
@@ -478,7 +535,7 @@ class JarvisAgent:
             return text
         lines = [text, "", "Источники:"]
         lines.extend(
-            f"{index}. {title} — {url}"
+            f"{index}. {title}" + (f" — {url}" if url else "")
             for index, (title, url) in enumerate(sources, start=1)
         )
         return "\n".join(lines)

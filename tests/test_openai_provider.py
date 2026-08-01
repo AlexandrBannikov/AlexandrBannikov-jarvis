@@ -306,6 +306,18 @@ def test_web_search_errors_are_distinct(
         )
 
 
+def test_web_search_requests_retrieved_sources() -> None:
+    provider = OpenAIProvider(api_key="key", model=DEFAULT_OPENAI_MODEL)
+    provider._client = Mock()
+    provider._client.responses.create.return_value = SimpleNamespace(id="r1")
+
+    provider.create_response([], tools=[{"type": "web_search"}])
+
+    assert provider._client.responses.create.call_args.kwargs["include"] == [
+        "web_search_call.action.sources"
+    ]
+
+
 def test_invalid_function_schema_is_not_web_search_unsupported() -> None:
     provider = OpenAIProvider(api_key="key", model=DEFAULT_OPENAI_MODEL)
     provider._client = Mock()
