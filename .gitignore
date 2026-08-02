@@ -1,5 +1,9 @@
 __pycache__/
 *.pyc
+document_sessions.db
+document_sessions.db-wal
+document_sessions.db-shm
+/documents/
 venv/
 .venv/
 .env

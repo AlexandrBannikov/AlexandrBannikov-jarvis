@@ -10,6 +10,10 @@ import platform
 import socket
 import secrets
 import time
+import mimetypes
+from pathlib import Path
+import re
+import uuid
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ChatAction
@@ -25,6 +29,8 @@ from app.reminders.service import ReminderError
 from app.location.models import LocationCandidate
 from zoneinfo import ZoneInfo
 from app.access import CapabilityPolicy, Principal, OWNER
+from app.documents.service import DocumentError
+from app.documents.validators import ValidationError
 
 logger = logging.getLogger(__name__)
 START_MESSAGE = "Привет.\nЯ Jarvis.\nСистема запущена."
@@ -571,6 +577,16 @@ async def handle_text(
                 for chunk in _split_message(reminder_response):
                     await message.reply_text(chunk)
                 return
+        document_service = context.application.bot_data.get("document_service")
+        if document_service is not None:
+            lowered = prompt.casefold()
+            if re.search(r"\bзабудь\b.*\bдокумент", lowered):
+                await message.reply_text("Документ удалён." if document_service.forget(user_id, chat_id) else "Активный документ не найден.")
+                return
+            if re.search(r"\b(покажи|список)\b.*\bактивн\w* документ", lowered):
+                docs=document_service.list_documents(user_id,chat_id)
+                text="Активных документов нет." if not docs else "Ваши активные документы:\n"+"\n".join(f"— {x.safe_filename} ({x.document_type.upper()})" for x in docs)
+                await message.reply_text(text);return
         typing_task = asyncio.create_task(
             _show_typing(context, update.effective_chat.id)
         )
@@ -579,6 +595,14 @@ async def handle_text(
                               source_message_id=getattr(message, "message_id", None),
                               is_allowlisted=bool(principal and principal.role == OWNER),
                               principal=principal)
+            if document_service is not None:
+                page_match=re.search(r"(?i)страниц[аеы]?\s+(\d+)",prompt)
+                sheet_match=re.search(r"(?i)лист[ае]?\s+[«\"]?([^»\"?.]+)",prompt)
+                doc_context=await asyncio.to_thread(document_service.context,user_id,chat_id,prompt,page=int(page_match.group(1)) if page_match else None,sheet=sheet_match.group(1).strip() if sheet_match else None)
+                active_document=document_service.storage.active(user_id,chat_id)
+                if active_document and active_document.document_type=="image" and active_document.file_path and active_document.file_path.is_file():
+                    ask_kwargs["image_data_url"]=document_service.image.prepare(active_document.file_path,active_document.mime_type)
+                elif doc_context: ask_kwargs["document_context"]=doc_context
             thread_id = getattr(message, "message_thread_id", None)
             reply_to = getattr(getattr(message, "reply_to_message", None), "message_id", None)
             if thread_id is not None: ask_kwargs["thread_id"] = thread_id
@@ -612,7 +636,47 @@ async def handle_text(
                 await typing_task
 
         for chunk in _split_message(response):
-            await message.reply_text(chunk)
+            await message.reply_text(document_service.redact(chunk) if document_service is not None else chunk)
+
+
+async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Download only a file identifier received in this trusted update."""
+    message=update.effective_message; user=update.effective_user; chat=update.effective_chat
+    service=context.application.bot_data.get("document_service")
+    if not message or not user or not chat or service is None:return
+    attachment=getattr(message,"document",None)
+    is_photo=False
+    if attachment is None and getattr(message,"photo",None): attachment=message.photo[-1];is_photo=True
+    if attachment is None:return
+    file_id=attachment.file_id;size=int(getattr(attachment,"file_size",0) or 0)
+    filename=(getattr(attachment,"file_name",None) or ("photo.jpg" if is_photo else None))
+    mime=(getattr(attachment,"mime_type",None) or ("image/jpeg" if is_photo else mimetypes.guess_type(filename or "")[0]) or "application/octet-stream")
+    incoming=service.storage.storage_path/(".incoming-"+uuid.uuid4().hex)
+    try:
+        if size<=0:raise DocumentError("FILE_SIZE_UNKNOWN","Telegram не сообщил размер файла; безопасная загрузка невозможна.")
+        existing=service.storage.by_message(user.id,chat.id,message.message_id)
+        if existing:
+            await message.reply_text("Этот файл уже обработан.");return
+        validated=service.validator.validate_metadata(filename,mime,size)
+        telegram_file=await context.bot.get_file(file_id)
+        await telegram_file.download_to_drive(custom_path=str(incoming));incoming.chmod(0o600)
+        actual=incoming.stat().st_size
+        if size and actual!=size:raise DocumentError("SIZE_MISMATCH","Размер скачанного файла не совпадает с данными Telegram.")
+        session=await asyncio.to_thread(service.ingest,incoming,user_id=user.id,chat_id=chat.id,message_id=message.message_id,file_id=file_id,filename=filename,mime_type=mime,file_size=actual)
+        from app.documents.formatter import received
+        caption=(getattr(message,"caption",None) or "").strip()
+        if not caption:
+            await message.reply_text(received(session));return
+        kwargs=dict(user_id=user.id,chat_id=chat.id,source_message_id=message.message_id,is_allowlisted=True,principal=_principal(update,context))
+        if session.document_type=="image":
+            kwargs["image_data_url"]=service.image.prepare(session.file_path,session.mime_type)
+        else:kwargs["document_context"]=await asyncio.to_thread(service.context,user.id,chat.id,caption,session.id)
+        response=await context.application.bot_data["agent"].ask(caption,**kwargs)
+        await message.reply_text(service.redact(response))
+    except (DocumentError, ValidationError) as error:
+        incoming.unlink(missing_ok=True);await message.reply_text(getattr(error,"user_message","Не удалось обработать документ."))
+    except Exception as error:
+        incoming.unlink(missing_ok=True);logger.error("Document processing failed: error_type=%s",type(error).__name__);await message.reply_text("Не удалось безопасно обработать документ.")
 
 
 async def handle_unknown(

@@ -34,6 +34,7 @@ from app.conversation import ConversationStorage  # noqa: E402
 from app.startup import startup_self_check  # noqa: E402
 from app.tools import create_default_tool_manager  # noqa: E402
 from app.access import AccessStorage, CapabilityPolicy, Principal  # noqa: E402
+from app.documents import DocumentService, DocumentSessionStorage  # noqa: E402
 from scripts.check_secrets import scan_repository  # noqa: E402
 
 ENV_TEMPLATE = """TELEGRAM_BOT_TOKEN=
@@ -68,6 +69,19 @@ REMINDERS_MIN_RECURRENCE_SECONDS=3600
 REMINDERS_DELIVERY_ENABLED=true
 REMINDERS_LEASE_SECONDS=120
 REMINDERS_LIST_LIMIT=20
+DOCUMENTS_ENABLED=false
+DOCUMENTS_STORAGE_PATH=/var/lib/jarvis/documents
+DOCUMENTS_DB_PATH=/var/lib/jarvis/document_sessions.db
+DOCUMENTS_MAX_FILE_SIZE_MB=20
+DOCUMENTS_MAX_TEXT_CHARS=500000
+DOCUMENTS_MAX_PDF_PAGES=300
+DOCUMENTS_MAX_DOCX_PARAGRAPHS=20000
+DOCUMENTS_MAX_SPREADSHEET_CELLS=200000
+DOCUMENTS_MAX_IMAGE_PIXELS=25000000
+DOCUMENTS_SESSION_TTL_HOURS=24
+DOCUMENTS_MAX_ACTIVE_PER_USER=20
+DOCUMENTS_MAX_CONTEXT_CHARS=50000
+DOCUMENTS_MAX_CHUNKS_PER_REQUEST=12
 
 # Deprecated compatibility settings; production SSH uses the Agent settings below.
 JARVIS_SSH_MODE=real
@@ -436,6 +450,23 @@ def validate(
             report.fail("Reminder database directory and schema")
     else:
         report.warn("Reminders disabled")
+    if config is not None and config.documents_enabled:
+        try:
+            project_path=paths.project_root.resolve();storage_path=config.documents_storage_path.resolve();db_path=config.documents_db_path.resolve()
+            outside=all(path!=project_path and project_path not in path.parents for path in (storage_path,db_path))
+            if outside:report.pass_("Document runtime storage outside Git repository")
+            else:report.fail("Document runtime storage outside Git repository")
+            storage=DocumentSessionStorage(db_path,storage_path);storage.initialize()
+            if storage.validate_schema():report.pass_("Document SQLite schema and migrations")
+            else:report.fail("Document SQLite schema and migrations")
+            if (storage_path.stat().st_mode&0o777)==0o700 and (db_path.stat().st_mode&0o777)==0o600:report.pass_("Document storage permissions")
+            else:report.fail("Document storage permissions")
+            DocumentService(storage,max_file_size_mb=config.documents_max_file_size_mb,max_text_chars=config.documents_max_text_chars,max_pdf_pages=config.documents_max_pdf_pages,max_docx_paragraphs=config.documents_max_docx_paragraphs,max_spreadsheet_cells=config.documents_max_spreadsheet_cells,max_image_pixels=config.documents_max_image_pixels,ttl_hours=config.documents_session_ttl_hours,max_active_per_user=config.documents_max_active_per_user,max_context_chars=config.documents_max_context_chars,max_chunks_per_request=config.documents_max_chunks_per_request)
+            report.pass_("Document MIME allowlist, limits, cleanup and image API support")
+            report.pass_("Document extraction libraries; OCR dependency not required")
+        except Exception:
+            report.fail("Document storage, database, dependencies and limits")
+    else:report.warn("Documents disabled")
     # hosts.yaml belongs to the deprecated pre-Agent SSH implementation. Keep it
     # on disk for compatibility, but do not make production readiness depend on it.
     if paths.hosts_file.is_file():

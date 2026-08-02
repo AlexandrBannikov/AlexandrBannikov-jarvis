@@ -62,6 +62,19 @@ class Config:
     location_db_path: Path = Path("/var/lib/jarvis/location.db")
     access_db_path: Path = Path("/var/lib/jarvis/access.db")
     family_invite_ttl_seconds: int = 86400
+    documents_enabled: bool = False
+    documents_storage_path: Path = Path("/var/lib/jarvis/documents")
+    documents_db_path: Path = Path("/var/lib/jarvis/document_sessions.db")
+    documents_max_file_size_mb: int = 20
+    documents_max_text_chars: int = 500_000
+    documents_max_pdf_pages: int = 300
+    documents_max_docx_paragraphs: int = 20_000
+    documents_max_spreadsheet_cells: int = 200_000
+    documents_max_image_pixels: int = 25_000_000
+    documents_session_ttl_hours: int = 24
+    documents_max_active_per_user: int = 20
+    documents_max_context_chars: int = 50_000
+    documents_max_chunks_per_request: int = 12
 
 
 def _parse_boolean(value: str, name: str) -> bool:
@@ -309,4 +322,17 @@ def load_config(environment: Mapping[str, str] | None = None) -> Config:
             values.get("FAMILY_INVITE_TTL_SECONDS", "86400"),
             "FAMILY_INVITE_TTL_SECONDS", 300, 604800,
         ),
+        documents_enabled=_parse_boolean(values.get("DOCUMENTS_ENABLED", "false"), "DOCUMENTS_ENABLED"),
+        documents_storage_path=Path(values.get("DOCUMENTS_STORAGE_PATH", "/var/lib/jarvis/documents").strip() or "/var/lib/jarvis/documents"),
+        documents_db_path=Path(values.get("DOCUMENTS_DB_PATH", "/var/lib/jarvis/document_sessions.db").strip() or "/var/lib/jarvis/document_sessions.db"),
+        documents_max_file_size_mb=_parse_bounded_int(values.get("DOCUMENTS_MAX_FILE_SIZE_MB", "20"), "DOCUMENTS_MAX_FILE_SIZE_MB", 1, 100),
+        documents_max_text_chars=_parse_bounded_int(values.get("DOCUMENTS_MAX_TEXT_CHARS", "500000"), "DOCUMENTS_MAX_TEXT_CHARS", 1000, 5000000),
+        documents_max_pdf_pages=_parse_bounded_int(values.get("DOCUMENTS_MAX_PDF_PAGES", "300"), "DOCUMENTS_MAX_PDF_PAGES", 1, 2000),
+        documents_max_docx_paragraphs=_parse_bounded_int(values.get("DOCUMENTS_MAX_DOCX_PARAGRAPHS", "20000"), "DOCUMENTS_MAX_DOCX_PARAGRAPHS", 1, 100000),
+        documents_max_spreadsheet_cells=_parse_bounded_int(values.get("DOCUMENTS_MAX_SPREADSHEET_CELLS", "200000"), "DOCUMENTS_MAX_SPREADSHEET_CELLS", 1, 2000000),
+        documents_max_image_pixels=_parse_bounded_int(values.get("DOCUMENTS_MAX_IMAGE_PIXELS", "25000000"), "DOCUMENTS_MAX_IMAGE_PIXELS", 10000, 100000000),
+        documents_session_ttl_hours=_parse_bounded_int(values.get("DOCUMENTS_SESSION_TTL_HOURS", "24"), "DOCUMENTS_SESSION_TTL_HOURS", 1, 720),
+        documents_max_active_per_user=_parse_bounded_int(values.get("DOCUMENTS_MAX_ACTIVE_PER_USER", "20"), "DOCUMENTS_MAX_ACTIVE_PER_USER", 1, 100),
+        documents_max_context_chars=_parse_bounded_int(values.get("DOCUMENTS_MAX_CONTEXT_CHARS", "50000"), "DOCUMENTS_MAX_CONTEXT_CHARS", 1000, 200000),
+        documents_max_chunks_per_request=_parse_bounded_int(values.get("DOCUMENTS_MAX_CHUNKS_PER_REQUEST", "12"), "DOCUMENTS_MAX_CHUNKS_PER_REQUEST", 1, 50),
     )

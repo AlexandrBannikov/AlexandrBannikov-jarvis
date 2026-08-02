@@ -2,6 +2,8 @@
 
 from app.config import Config
 from app.ssh_agent.bootstrap import SSHDependencies, build_ssh_dependencies
+from pathlib import Path
+import importlib.util
 
 
 def startup_self_check(config: Config) -> SSHDependencies:
@@ -14,4 +16,13 @@ def startup_self_check(config: Config) -> SSHDependencies:
         raise RuntimeError(
             f"SSH Agent readiness failed: {dependencies.readiness.code.value}"
         )
+    if config.documents_enabled:
+        required=("pypdf","docx","openpyxl","PIL")
+        missing=[name for name in required if importlib.util.find_spec(name) is None]
+        if missing: raise RuntimeError("Document dependencies missing: "+", ".join(missing))
+        project=Path(__file__).resolve().parents[1]
+        for path in (config.documents_storage_path,config.documents_db_path):
+            try:path.resolve().relative_to(project)
+            except ValueError:continue
+            raise RuntimeError("Document runtime paths must be outside Git")
     return dependencies

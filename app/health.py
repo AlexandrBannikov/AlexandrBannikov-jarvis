@@ -15,6 +15,8 @@ _SKILL_REGISTRY = None
 _CONVERSATION_PROVIDER = None
 _LOCATION_STORAGE = None
 _FAMILY_ACCESS_STORAGE = None
+_DOCUMENT_SERVICE = None
+_DOCUMENTS_ENABLED = False
 
 
 def set_reminder_health_provider(provider, *, enabled: bool, storage=None) -> None:
@@ -44,6 +46,10 @@ def set_location_health_provider(storage) -> None:
 def set_family_access_health_provider(storage) -> None:
     global _FAMILY_ACCESS_STORAGE
     _FAMILY_ACCESS_STORAGE = storage
+
+def set_document_health_provider(service, *, enabled: bool) -> None:
+    global _DOCUMENT_SERVICE, _DOCUMENTS_ENABLED
+    _DOCUMENT_SERVICE=service;_DOCUMENTS_ENABLED=enabled
 
 
 def health_payload() -> dict[str, object]:
@@ -79,6 +85,13 @@ def health_payload() -> dict[str, object]:
         "location_context": {"status": "disabled", "users_with_location": 0},
         "family_access": {"status": "disabled", "active_family_users": 0,
                           "pending_invites": 0, "disabled_users": 0},
+        "documents_enabled": _DOCUMENTS_ENABLED,
+        "document_storage_ok": not _DOCUMENTS_ENABLED,
+        "document_database_ok": not _DOCUMENTS_ENABLED,
+        "active_documents_count": 0,
+        "expired_documents_pending_cleanup": 0,
+        "last_document_error_code": None,
+        "cleanup_running": False,
     }
     if _REMINDERS_ENABLED and _REMINDER_STORAGE is not None:
         try:
@@ -148,6 +161,12 @@ def health_payload() -> dict[str, object]:
     if _FAMILY_ACCESS_STORAGE is not None:
         try: payload["family_access"] = _FAMILY_ACCESS_STORAGE.summary()
         except Exception: payload["family_access"] = {"status":"error","active_family_users":0,"pending_invites":0,"disabled_users":0}
+    if _DOCUMENT_SERVICE is not None:
+        try:
+            metrics=_DOCUMENT_SERVICE.storage.metrics()
+            payload.update({"document_storage_ok":_DOCUMENT_SERVICE.storage.storage_path.is_dir(),"document_database_ok":_DOCUMENT_SERVICE.storage.validate_schema(),"active_documents_count":metrics["active"],"expired_documents_pending_cleanup":metrics["expired"],"last_document_error_code":_DOCUMENT_SERVICE.last_error_code,"cleanup_running":_DOCUMENT_SERVICE.cleanup_running})
+        except Exception:
+            payload["document_storage_ok"]=False;payload["document_database_ok"]=False;payload["last_document_error_code"]="HEALTH_DOCUMENT_ERROR"
     return payload
 
 

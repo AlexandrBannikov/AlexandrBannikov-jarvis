@@ -32,6 +32,7 @@ from app.handlers import (
     invite_family_command, family_users_command, disable_family_user_command,
     enable_family_user_command, remove_family_user_command,
     revoke_family_invite_command,
+    handle_document,
 )
 from app.memory import MemoryManager, MemoryStorage
 from app.memory.tools import register_memory_tools
@@ -47,6 +48,9 @@ from app.location import LocationService, LocationStorage
 from app.location.tool import GetUserLocationTool
 from app.access import AccessStorage, CapabilityPolicy, RateLimiter
 from app.health import set_family_access_health_provider
+from app.documents import DocumentService, DocumentSessionStorage
+from app.documents.tools import register_document_tools
+from app.health import set_document_health_provider
 
 logger = logging.getLogger(__name__)
 
@@ -76,12 +80,26 @@ async def initialize_application(application: Application) -> None:
     scheduler = application.bot_data.get("reminder_scheduler")
     if scheduler is not None:
         scheduler.start()
+    document_service = application.bot_data.get("document_service")
+    if document_service is not None:
+        async def cleanup_loop():
+            import asyncio
+            while True:
+                await asyncio.sleep(3600)
+                await asyncio.to_thread(document_service.cleanup, True)
+        application.bot_data["document_cleanup_task"] = __import__("asyncio").create_task(cleanup_loop())
 
 
 async def shutdown_application(application: Application) -> None:
     scheduler = application.bot_data.get("reminder_scheduler")
     if scheduler is not None:
         await scheduler.stop()
+    task=application.bot_data.get("document_cleanup_task")
+    if task is not None:
+        task.cancel()
+        from contextlib import suppress
+        import asyncio
+        with suppress(asyncio.CancelledError): await task
 
 
 def build_application(config: Config) -> Application:
@@ -108,6 +126,19 @@ def build_application(config: Config) -> Application:
         str(config.jarvis_hosts_config),
         include_legacy_remote=False,
     )
+    document_service = None
+    if config.documents_enabled:
+        document_storage=DocumentSessionStorage(config.documents_db_path,config.documents_storage_path)
+        document_storage.initialize()
+        document_service=DocumentService(document_storage,
+            max_file_size_mb=config.documents_max_file_size_mb,max_text_chars=config.documents_max_text_chars,
+            max_pdf_pages=config.documents_max_pdf_pages,max_docx_paragraphs=config.documents_max_docx_paragraphs,
+            max_spreadsheet_cells=config.documents_max_spreadsheet_cells,max_image_pixels=config.documents_max_image_pixels,
+            ttl_hours=config.documents_session_ttl_hours,max_active_per_user=config.documents_max_active_per_user,
+            max_context_chars=config.documents_max_context_chars,max_chunks_per_request=config.documents_max_chunks_per_request)
+        register_document_tools(tool_manager.registry,document_service)
+    application.bot_data["document_service"]=document_service
+    set_document_health_provider(document_service,enabled=config.documents_enabled)
     memory_manager = None
     if config.memory_enabled:
         memory_manager = MemoryManager(
@@ -243,6 +274,7 @@ def build_application(config: Config) -> Application:
     application.add_handler(CommandHandler("revoke_family_invite", revoke_family_invite_command))
     application.add_handler(CallbackQueryHandler(location_callback, pattern=r"^location:(save|discard):[A-Za-z0-9_-]{8,16}$"))
     application.add_handler(MessageHandler(filters.LOCATION, handle_location))
+    application.add_handler(MessageHandler(filters.Document.ALL | filters.PHOTO, handle_document))
     application.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text)
     )
