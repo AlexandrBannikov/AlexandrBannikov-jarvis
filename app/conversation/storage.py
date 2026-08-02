@@ -39,6 +39,8 @@ class ConversationStorage:
         with self._lock,self._connect() as conn: conn.execute("UPDATE conversation_states SET status='closed',pending_question_json=NULL,updated_at=? WHERE owner_id=? AND chat_id=? AND thread_id=?",(utcnow().isoformat(),key.owner_id,key.chat_id,self._thread(key.thread_id)))
     def active_sessions(self)->int:
         with self._lock,self._connect() as conn:return int(conn.execute("SELECT COUNT(*) FROM conversation_states WHERE status='active' AND expires_at>?",(utcnow().isoformat(),)).fetchone()[0])
+    def pending_intents_count(self)->int:
+        with self._lock,self._connect() as conn:return int(conn.execute("SELECT COUNT(*) FROM conversation_states WHERE status='active' AND expires_at>? AND pending_question_json IS NOT NULL AND pending_question_json!='null'",(utcnow().isoformat(),)).fetchone()[0])
     def validate_schema(self)->bool:
         with self._lock,self._connect() as conn:names={r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         return {"conversation_states","conversation_messages"}<=names

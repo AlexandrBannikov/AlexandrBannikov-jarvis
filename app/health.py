@@ -21,6 +21,7 @@ _CRYPTO_SERVICE=None
 _CRYPTO_ENABLED=False
 _CRYPTO_HOST_CONFIGURED=False
 _CRYPTO_OPERATIONS=0
+_ROUTING_AGENT=None
 
 
 def set_reminder_health_provider(provider, *, enabled: bool, storage=None) -> None:
@@ -57,6 +58,10 @@ def set_document_health_provider(service, *, enabled: bool) -> None:
 def set_crypto_health_provider(service,*,enabled:bool,host_configured:bool,operations_registered:int)->None:
     global _CRYPTO_SERVICE,_CRYPTO_ENABLED,_CRYPTO_HOST_CONFIGURED,_CRYPTO_OPERATIONS
     _CRYPTO_SERVICE=service;_CRYPTO_ENABLED=enabled;_CRYPTO_HOST_CONFIGURED=host_configured;_CRYPTO_OPERATIONS=operations_registered
+
+def set_routing_health_provider(agent)->None:
+    global _ROUTING_AGENT
+    _ROUTING_AGENT=agent
 
 
 def health_payload() -> dict[str, object]:
@@ -106,6 +111,14 @@ def health_payload() -> dict[str, object]:
         "last_crypto_check_status":"never",
         "last_crypto_error_code":None,
         "crypto_cache_entries":0,
+        "universal_router_enabled":_ROUTING_AGENT is not None,
+        "last_routing_intent":getattr(_ROUTING_AGENT,"last_routing_intent","UNKNOWN"),
+        "last_routing_capabilities_count":getattr(_ROUTING_AGENT,"last_routing_capabilities_count",0),
+        "last_routing_status":getattr(_ROUTING_AGENT,"last_routing_status","never"),
+        "last_tool_fallback_code":getattr(_ROUTING_AGENT,"last_tool_fallback_code",None),
+        "pending_intents_count":0,
+        "weather_routing_available":bool(_ROUTING_AGENT and _LOCATION_STORAGE is not None),
+        "web_search_available":bool(_ROUTING_AGENT and getattr(_ROUTING_AGENT,"web_search_enabled",False)),
     }
     if _REMINDERS_ENABLED and _REMINDER_STORAGE is not None:
         try:
@@ -167,6 +180,7 @@ def health_payload() -> dict[str, object]:
     if _CONVERSATION_PROVIDER is not None:
         try:
             payload["conversation_state"] = {"status": "ok", "active_sessions": int(_CONVERSATION_PROVIDER.active_sessions())}
+            payload["pending_intents_count"] = int(_CONVERSATION_PROVIDER.pending_intents_count())
         except Exception:
             payload["conversation_state"] = {"status": "warning", "active_sessions": 0}
     if _LOCATION_STORAGE is not None:

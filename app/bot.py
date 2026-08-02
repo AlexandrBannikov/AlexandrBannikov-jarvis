@@ -55,6 +55,7 @@ from app.crypto_control import CryptoControlService, CryptoOperationRegistry
 from app.crypto_control.service import CryptoRemoteClient
 from app.crypto_control.tools import register_crypto_tools
 from app.health import set_crypto_health_provider
+from app.health import set_routing_health_provider
 
 logger = logging.getLogger(__name__)
 
@@ -244,7 +245,7 @@ def build_application(config: Config) -> Application:
     )
     application.bot_data["skill_registry"] = skill_registry
     set_skill_health_provider(skill_registry)
-    application.bot_data["agent"] = JarvisAgent(
+    agent = JarvisAgent(
         ai_client.provider,
         tool_manager,
         max_tool_rounds=config.max_tool_rounds,
@@ -256,6 +257,8 @@ def build_application(config: Config) -> Application:
         capability_policy=capability_policy,
         rate_limiter=rate_limiter,
     )
+    application.bot_data["agent"] = agent
+    set_routing_health_provider(agent)
     application.bot_data["user_locks"] = {}
     application.add_handler(
         MessageHandler(filters.ALL, log_incoming_update), group=-2

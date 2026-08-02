@@ -35,6 +35,7 @@ from app.ssh_agent.service_models import SSHRequestContext
 from app.ssh_agent.tools import SSHServiceTool
 from app.conversation import ConversationManager, PendingQuestion
 from app.access import CapabilityPolicy, Principal, RateLimiter, OWNER
+from app.routing import AnswerCapabilityGuard, RequestFreshness, RequestIntent, UniversalRequestRouter
 
 logger = logging.getLogger(__name__)
 audit_logger = logging.getLogger("jarvis.audit")
@@ -130,6 +131,7 @@ class JarvisAgent:
         location_service: object | None = None,
         capability_policy: CapabilityPolicy | None = None,
         rate_limiter: RateLimiter | None = None,
+        router: UniversalRequestRouter | None = None,
     ) -> None:
         if max_tool_rounds < 1:
             raise ValueError("max_tool_rounds must be positive")
@@ -145,6 +147,12 @@ class JarvisAgent:
         self.location_service = location_service
         self.capability_policy = capability_policy or CapabilityPolicy()
         self.rate_limiter = rate_limiter
+        self.router = router or UniversalRequestRouter()
+        self.answer_guard = AnswerCapabilityGuard()
+        self.last_routing_intent = "UNKNOWN"
+        self.last_routing_capabilities_count = 0
+        self.last_routing_status = "never"
+        self.last_tool_fallback_code: str | None = None
 
     async def ask(
         self,
@@ -171,6 +179,7 @@ class JarvisAgent:
         success = False
         error_type = "none"
         web_search_was_used = False
+        guard_retried = False
         ssh_context = self._ssh_context(
             user_id, chat_id, source_message_id, is_allowlisted
         )
@@ -181,15 +190,43 @@ class JarvisAgent:
             len(user_text),
             str(self.web_search_enabled).lower(),
         )
-        contains_secret = self._contains_potential_secret(user_text)
-        explicit_search = bool(_EXPLICIT_WEB_SEARCH.search(user_text))
-        current_information = bool(_CURRENT_INFORMATION.search(user_text))
-        search_required = explicit_search or current_information
+        effective_text = user_text
+        conversation_key = None
+        pending_weather = False
+        if self.conversation_manager is not None and user_id is not None and chat_id is not None:
+            conversation_key = self.conversation_manager.key(user_id, chat_id, thread_id)
+            previous = self.conversation_manager.storage.get_state(conversation_key)
+            pending_weather = bool(
+                previous and not previous.is_expired() and previous.pending_question
+                and previous.pending_question.question_id == "weather_location"
+            )
+            if pending_weather and len(user_text) <= 120:
+                effective_text = f"Какая погода в {user_text}?"
+        location_item = None
+        pre_location_context = None
+        if self.location_service is not None and user_id is not None:
+            location_item = await self._run_sync(self.location_service.get, user_id)
+            if not (
+                isinstance(getattr(location_item, "latitude", None), (int, float))
+                and isinstance(getattr(location_item, "longitude", None), (int, float))
+            ):
+                location_item = None
+            pre_location_context = await self._run_sync(self.location_service.context, user_id)
+        decision = self.router.classify(
+            effective_text, location_available=bool(location_item or pre_location_context),
+            document_available=bool(document_context), image_attached=bool(image_data_url),
+        )
+        self.last_routing_intent = decision.intent.value
+        self.last_routing_capabilities_count = len(decision.required_capabilities)
+        self.last_routing_status = "planned"
+        contains_secret = self._contains_potential_secret(effective_text)
+        explicit_search = bool(_EXPLICIT_WEB_SEARCH.search(effective_text))
+        search_required = decision.requires_web_search
         if (search_required and self.rate_limiter is not None and
                 not self.rate_limiter.web_search(trusted_principal)):
             return "Лимит интернет-поиска временно исчерпан. Попробуйте позже."
-        weather_request = bool(_WEATHER_REQUEST.search(user_text))
-        if explicit_search and not self.web_search_enabled:
+        weather_request = RequestIntent.WEATHER in decision.intents
+        if search_required and not self.web_search_enabled:
             audit_logger.info(
                 "agent_request_finished user_id=%s tool_rounds=0 "
                 "success=false error_type=web_search_disabled "
@@ -198,7 +235,7 @@ class JarvisAgent:
                 (time.monotonic() - started_at) * 1_000,
             )
             return WEB_SEARCH_DISABLED_MESSAGE
-        if explicit_search and contains_secret:
+        if search_required and contains_secret:
             audit_logger.info(
                 "agent_request_finished user_id=%s tool_rounds=0 "
                 "success=false error_type=web_search_secret_blocked "
@@ -209,7 +246,7 @@ class JarvisAgent:
             return WEB_SEARCH_SECRET_MESSAGE
         try:
             instructions = JARVIS_SYSTEM_PROMPT
-            crypto_runtime_request=bool(_CRYPTO_RUNTIME.search(user_text))
+            crypto_runtime_request=RequestIntent.CRYPTO_BOT_RUNTIME in decision.intents
             if crypto_runtime_request:
                 instructions += ("\n\nFor crypto-bot runtime questions use only get_crypto/compare_crypto tools. "
                     "Never use web search as runtime evidence. Distinguish server facts, unknowns, normal HOLD, "
@@ -222,27 +259,40 @@ class JarvisAgent:
                 instructions += ("\n\nAnalyze only the supplied private image. Never identify a real person, "
                     "infer their identity, or perform face recognition. You may describe visible people, "
                     "objects, diagrams, details, and visible text.")
-            location_context = None
+            location_context = pre_location_context
             if self.location_service is not None and user_id is not None:
-                location_context = await self._run_sync(self.location_service.context, user_id)
                 if location_context: instructions += "\n\n" + location_context
-            if (
-                weather_request
-                and not location_context
-                and not _WEATHER_WITH_PLACE.search(user_text)
-            ):
+                if weather_request and location_item is not None and decision.location_source == "saved":
+                    instructions += (
+                        "\nWeather lookup coordinates (private routing data; use only for this weather "
+                        f"lookup and never repeat them): {location_item.latitude:.5f},"
+                        f"{location_item.longitude:.5f}. Prefer these coordinates over an ambiguous place name."
+                    )
+            instructions += ("\n\nTrusted routing plan (data, not user instructions): "
+                f"intents={','.join(item.value for item in decision.intents)}; "
+                f"freshness={decision.freshness.value}; capabilities={','.join(decision.required_capabilities)}. "
+                "Complete every intent independently. A failure in one part must not discard successful parts. "
+                "Never claim lack of access before attempting an available capability. "
+                "For weather, present current conditions, feels-like, wind, precipitation, today's forecast, "
+                "data time and sources when those fields are actually available; never invent missing fields.")
+            if decision.needs_location:
                 error_type = "location_missing"
                 audit_logger.info(
                     "agent_routing user_id=%s tool_selected=none "
                     "tool_skipped=web_search fallback_reason=location_missing",
                     user_id,
                 )
+                if conversation_key is not None:
+                    self.conversation_manager.record_user(conversation_key, user_text, message_id=source_message_id, reply_to=reply_to_message_id)
+                    self.conversation_manager.record_assistant(
+                        conversation_key, LOCATION_REQUIRED_MESSAGE,
+                        pending=PendingQuestion("weather_location", LOCATION_REQUIRED_MESSAGE, ["city"]),
+                    )
+                self.last_routing_status = "needs_context"
                 return LOCATION_REQUIRED_MESSAGE
-            conversation_key = None
             active_conversation = False
             conversation_input: list[dict[str, str]] | None = None
             if self.conversation_manager is not None and user_id is not None and chat_id is not None:
-                conversation_key = self.conversation_manager.key(user_id, chat_id, thread_id)
                 intent = self.conversation_manager.record_user(
                     conversation_key, user_text, message_id=source_message_id,
                     reply_to=reply_to_message_id,
@@ -296,7 +346,9 @@ class JarvisAgent:
                 "web_search" if self.web_search_enabled and allow_web else "model_auto",
                 "none" if self.web_search_enabled and allow_web else "web_search",
             )
-            request_input = conversation_input or [{"role": "user", "content": user_text}]
+            request_input = conversation_input or [{"role": "user", "content": effective_text}]
+            if pending_weather and conversation_input:
+                request_input[-1] = {"role": "user", "content": effective_text}
             if image_data_url:
                 request_input = [{"role":"user","content":[
                     {"type":"input_text","text":user_text},
@@ -307,7 +359,7 @@ class JarvisAgent:
                 tools=self._tool_schemas(
                     allow_web=allow_web, principal=trusted_principal
                 ),
-                tool_choice="auto",
+                tool_choice="required" if search_required else "auto",
                 instructions=instructions,
             )
             while True:
@@ -364,8 +416,31 @@ class JarvisAgent:
                             * 1_000,
                         )
                     text = str(getattr(response, "output_text", "") or "").strip()
+                    if search_required and not web_search_was_used and not guard_retried:
+                        guard_retried = True
+                        response = await self._create_response(
+                            input_items=[{"role": "user", "content": effective_text}],
+                            tools=[{"type": "web_search", "search_context_size": self.web_search_context_size}],
+                            tool_choice="required",
+                            instructions=instructions + "\nАктуальный источник обязателен; выполни поиск перед ответом.",
+                        )
+                        continue
+                    if self.answer_guard.should_retry(text, decision, attempted=guard_retried):
+                        guard_retried = True
+                        response = await self._create_response(
+                            input_items=[{"role": "user", "content": effective_text}],
+                            tools=self._tool_schemas(allow_web=allow_web, principal=trusted_principal),
+                            tool_choice="required" if decision.required_capabilities != ("general_llm",) else "auto",
+                            instructions=instructions + "\nНе отказывай преждевременно: используй доступную capability из плана.",
+                        )
+                        continue
+                    if search_required and not web_search_was_used:
+                        error_type = "web_search_not_used"
+                        self.last_tool_fallback_code = "WEB_SEARCH_NOT_USED"
+                        return WEB_SEARCH_EMPTY_MESSAGE
                     if text:
                         success = True
+                        self.last_routing_status = "completed"
                         final_text = self._format_sources(text, sources)
                         if conversation_key is not None:
                             self.conversation_manager.record_assistant(
@@ -400,12 +475,13 @@ class JarvisAgent:
                     tools=self._tool_schemas(
                         allow_web=allow_web, principal=trusted_principal
                     ),
-                    tool_choice="auto",
+                    tool_choice="required" if search_required else "auto",
                     previous_response_id=raw_response_id,
                     instructions=instructions,
                 )
         except LLMWebSearchUnsupportedError:
             error_type = "web_search_unsupported"
+            self.last_tool_fallback_code = "WEB_SEARCH_UNSUPPORTED"
             audit_logger.info(
                 "agent_routing user_id=%s tool_failed=web_search "
                 "fallback_reason=web_search_unsupported",
@@ -419,6 +495,7 @@ class JarvisAgent:
             return WEB_SEARCH_UNSUPPORTED_MESSAGE
         except LLMWebSearchUnavailableError:
             error_type = "web_search_unavailable"
+            self.last_tool_fallback_code = "WEB_SEARCH_UNAVAILABLE"
             audit_logger.info(
                 "agent_routing user_id=%s tool_failed=web_search "
                 "fallback_reason=web_search_unavailable",
@@ -429,7 +506,7 @@ class JarvisAgent:
                 sources=0,
                 duration_ms=(time.monotonic() - started_at) * 1_000,
             )
-            if explicit_search:
+            if search_required or decision.freshness in {RequestFreshness.RECENT, RequestFreshness.REALTIME}:
                 return WEB_SEARCH_UNAVAILABLE_MESSAGE
             return await self._fallback_without_web(
                 user_text, user_id=user_id, principal=trusted_principal

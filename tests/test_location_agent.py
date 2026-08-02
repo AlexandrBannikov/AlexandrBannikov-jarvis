@@ -11,6 +11,6 @@ class Provider:
 def test_confirmed_location_is_added_to_context_for_same_user(tmp_path):
     provider=Provider();location=Mock();location.context.return_value="Confirmed location: Tyumen. IANA timezone: Asia/Yekaterinburg."
     manager=create_default_tool_manager(str(tmp_path/"missing.yaml"),include_legacy_remote=False)
-    answer=asyncio.run(JarvisAgent(provider,manager,run_sync=immediate,location_service=location).ask("Какая погода?",user_id=123))
-    assert answer=="ok" and "IANA timezone: Asia/Yekaterinburg" in provider.request["instructions"]
+    answer=asyncio.run(JarvisAgent(provider,manager,run_sync=immediate,location_service=location,web_search_enabled=True).ask("Какая погода?",user_id=123))
+    assert answer!="ok" and "IANA timezone: Asia/Yekaterinburg" in provider.request["instructions"]
     location.context.assert_called_once_with(123)

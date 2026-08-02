@@ -537,7 +537,7 @@ def test_bad_request_does_not_claim_web_search_is_unsupported() -> None:
     assert answer != WEB_SEARCH_UNSUPPORTED_MESSAGE
 
 
-def test_search_failure_can_fall_back_for_stable_question() -> None:
+def test_search_failure_does_not_fake_latest_version() -> None:
     provider = FakeProvider(
         [
             LLMWebSearchUnavailableError(),
@@ -554,11 +554,8 @@ def test_search_failure_can_fall_back_for_stable_question() -> None:
         ).ask("Какая последняя версия Python?")
     )
 
-    assert answer == "Стабильный ответ без поиска."
-    assert all(
-        tool["type"] != "web_search"
-        for tool in provider.requests[1]["tools"]
-    )
+    assert answer == WEB_SEARCH_UNAVAILABLE_MESSAGE
+    assert len(provider.requests) == 1
 
 
 @pytest.mark.parametrize(
