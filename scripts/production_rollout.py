@@ -26,7 +26,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from app import __version__  # noqa: E402
 from app.config import Config, load_config  # noqa: E402
 from app.health import probe_health  # noqa: E402
-from app.infrastructure.hosts import load_hosts_config  # noqa: E402
+from app.ssh_agent.bootstrap import build_ssh_dependencies  # noqa: E402
 from app.memory import MemoryStorage  # noqa: E402
 from app.reminders import ReminderStorage  # noqa: E402
 from app.skills.builtin import build_skill_registry  # noqa: E402
@@ -69,8 +69,11 @@ REMINDERS_DELIVERY_ENABLED=true
 REMINDERS_LEASE_SECONDS=120
 REMINDERS_LIST_LIMIT=20
 
-JARVIS_SSH_MODE=mock
+# Deprecated compatibility settings; production SSH uses the Agent settings below.
+JARVIS_SSH_MODE=real
 JARVIS_HOSTS_CONFIG=/etc/jarvis/hosts.yaml
+JARVIS_SSH_ENABLED=false
+JARVIS_SERVERS_CONFIG=/etc/jarvis/servers.json
 
 LOG_LEVEL=INFO
 HEALTH_HOST=127.0.0.1
@@ -433,52 +436,29 @@ def validate(
             report.fail("Reminder database directory and schema")
     else:
         report.warn("Reminders disabled")
-    if not paths.hosts_file.is_file():
-        report.fail("hosts.yaml exists")
-        hosts = None
-    else:
-        report.pass_("hosts.yaml exists")
-        try:
-            hosts = load_hosts_config(paths.hosts_file)
-            report.pass_("hosts.yaml is valid YAML")
-        except Exception:
-            hosts = None
-            report.fail("hosts.yaml is valid YAML")
-    if paths.known_hosts.is_file():
-        report.pass_("known_hosts exists")
-    else:
-        report.fail("known_hosts exists")
+    # hosts.yaml belongs to the deprecated pre-Agent SSH implementation. Keep it
+    # on disk for compatibility, but do not make production readiness depend on it.
+    if paths.hosts_file.is_file():
+        report.warn("Legacy hosts.yaml retained (deprecated)")
 
-    ssh_mode = values.get("JARVIS_SSH_MODE", "mock").strip().lower()
-    if ssh_mode == "mock":
-        report.warn("JARVIS_SSH_MODE=mock")
-    elif ssh_mode == "real":
-        if hosts and hosts.hosts:
-            report.pass_("Real SSH has configured hosts")
-            for host in hosts.hosts.values():
-                if host.username.lower() == "root":
-                    report.fail(f"SSH host {host.alias} uses root")
-                if not (
-                    _mode_ok(host.identity_file, 0o640)
-                    and _owner_ok(host.identity_file)
-                ):
-                    report.fail(f"SSH key for {host.alias}")
-                if not (
-                    _mode_ok(host.known_hosts_file, 0o640)
-                    and _owner_ok(host.known_hosts_file)
-                ):
-                    report.fail(f"known_hosts for {host.alias}")
+    if config is not None:
+        ssh = build_ssh_dependencies(
+            enabled=config.ssh_enabled,
+            config_path=config.ssh_servers_config_path,
+        )
+        if not config.ssh_enabled:
+            report.warn("SSH Agent disabled")
+        elif ssh.readiness.ready:
+            report.pass_("SSH Agent readiness: SSH_READY")
+            report.pass_(
+                f"SSH Agent registered hosts: {ssh.readiness.registered_servers_count}"
+            )
         else:
-            report.fail("Real SSH requires at least one host")
-    else:
-        report.fail("JARVIS_SSH_MODE is invalid")
+            report.fail(f"SSH Agent readiness: {ssh.readiness.code.value}")
 
     for path, mode, label in (
         (paths.etc_dir, 0o750, "/etc/jarvis"),
-        (paths.keys_dir, 0o750, "SSH keys directory"),
         (paths.env_file, 0o640, "jarvis.env"),
-        (paths.hosts_file, 0o640, "hosts.yaml"),
-        (paths.known_hosts, 0o640, "known_hosts"),
     ):
         _check_file(report, path, mode, label)
     if _unit_is_hardened(paths.source_unit):
@@ -487,10 +467,21 @@ def validate(
         report.fail("systemd unit hardening")
 
     try:
-        manager = create_default_tool_manager(str(paths.hosts_file))
+        manager = create_default_tool_manager(
+            str(paths.hosts_file), include_legacy_remote=False
+        )
+        ssh_dependencies = None
+        if config is not None:
+            ssh_dependencies = build_ssh_dependencies(
+                enabled=config.ssh_enabled,
+                config_path=config.ssh_servers_config_path,
+                tool_registry=manager.registry,
+            )
         report.pass_(f"Tool registry: {len(manager.registry.list_tools())} tools")
         if config is not None:
-            skills = build_skill_registry(manager.registry, config)
+            skills = build_skill_registry(
+                manager.registry, config, ssh_dependencies=ssh_dependencies
+            )
             required_errors = skills.required_errors()
             if required_errors:
                 report.fail("Skills Registry required capability")

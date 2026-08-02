@@ -19,7 +19,9 @@ ProtectHome=true
 ReadWritePaths=/opt/jarvis/logs /opt/jarvis/data
 StateDirectory=jarvis
 StateDirectoryMode=0700
-ReadOnlyPaths=-/etc/jarvis/hosts.yaml -/etc/jarvis/known_hosts -/etc/jarvis/keys
+# SSH Agent production source of truth. Legacy paths remain read-only while
+# hosts.yaml compatibility is deprecated.
+ReadOnlyPaths=-/etc/jarvis/servers.json -/etc/jarvis/ssh -/etc/jarvis/hosts.yaml -/etc/jarvis/known_hosts -/etc/jarvis/keys
 UMask=0077
 
 [Install]

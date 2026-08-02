@@ -109,7 +109,7 @@ def test_prepare_preserves_existing_files_and_sets_modes(
     assert paths.keys_dir.stat().st_mode & 0o777 == 0o750
 
 
-def test_validate_ready_in_mock_mode(
+def test_validate_ready_with_legacy_hosts_deprecated(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     paths = paths_for(tmp_path)
@@ -120,7 +120,8 @@ def test_validate_ready_in_mock_mode(
     report = rollout.validate(paths, emit=False, secret_scan=lambda: [])
 
     assert report.ready
-    assert ("WARN", "JARVIS_SSH_MODE=mock") in report.checks
+    assert ("WARN", "Legacy hosts.yaml retained (deprecated)") in report.checks
+    assert ("WARN", "SSH Agent disabled") in report.checks
     assert (
         "PASS",
         "OpenAI web search explicitly enabled",
@@ -171,39 +172,34 @@ def test_validate_initializes_enabled_memory(
     assert (paths.data_dir / "memory.db").exists()
 
 
-def test_real_ssh_mode_without_key_is_not_ready(
+def test_enabled_ssh_agent_without_key_is_not_ready(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     paths = paths_for(tmp_path)
     write_valid_environment(paths)
-    paths.env_file.write_text(
-        paths.env_file.read_text(encoding="utf-8").replace(
-            "JARVIS_SSH_MODE=mock", "JARVIS_SSH_MODE=real"
-        ),
+    servers = paths.etc_dir / "servers.json"
+    servers.write_text(
+        '{"version":1,"servers":{"example":{"host":"192.0.2.1",'
+        '"port":22,"user":"jarvis-monitor","identity_file":"'
+        + str(paths.keys_dir / "missing_key")
+        + '","host_key_alias":"example","enabled":true,"projects":{}}}}',
         encoding="utf-8",
     )
-    paths.hosts_file.write_text(
-        "\n".join(
-            [
-                "hosts:",
-                "  example:",
-                "    hostname: 192.0.2.1",
-                "    username: jarvis-monitor",
-                f"    identity_file: {paths.keys_dir / 'missing_key'}",
-                f"    known_hosts_file: {paths.known_hosts}",
-                "    allowed_services: []",
-            ]
-        ),
-        encoding="utf-8",
-    )
-    paths.hosts_file.chmod(0o640)
+    servers.chmod(0o600)
+    with paths.env_file.open("a", encoding="utf-8") as destination:
+        destination.write(
+            f"\nJARVIS_SSH_ENABLED=true\nJARVIS_SERVERS_CONFIG={servers}\n"
+        )
     monkeypatch.setattr(rollout, "_owner_ok", lambda path: True)
     monkeypatch.setattr(rollout, "_port_available", lambda host, port: True)
 
     report = rollout.validate(paths, emit=False, secret_scan=lambda: [])
 
     assert not report.ready
-    assert any("SSH key for example" in message for _, message in report.checks)
+    assert any(
+        "SSH Agent readiness: SSH_IDENTITY_FILE_MISSING" in message
+        for _, message in report.checks
+    )
 
 
 def test_install_refuses_invalid_configuration(
