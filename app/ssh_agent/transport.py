@@ -80,6 +80,26 @@ def _trusted_plan_shape(server: ServerConfig, plan: ExecutionPlan) -> bool:
         service for project in server.projects.values() for service in project.services
     )
     paths = frozenset(str(project.path) for project in server.projects.values())
+    if plan.operation.startswith("crypto_"):
+        from app.crypto_control.operations import CryptoOperationRegistry
+        try:
+            expected = CryptoOperationRegistry(
+                server.alias,
+                timeout=plan.timeout_seconds,
+                max_output_bytes=plan.stdout_limit_bytes,
+            ).plan(
+                plan.operation,
+                period=(str(plan.metadata.get("period")) or None),
+                environment=(str(plan.metadata.get("environment")) or None),
+            )
+        except (ValueError, TypeError):
+            return False
+        return (
+            "/opt/crypto-bot" in paths
+            and plan.argv == expected.argv
+            and plan.metadata == expected.metadata
+            and plan.sensitive_output is True
+        )
     if plan.operation == "service_status":
         expected_prefix = (
             "/usr/bin/systemctl", "show", "--no-pager",
@@ -209,8 +229,10 @@ def _classify(exit_code: int | None, stderr: str) -> ErrorCode:
         or "no rsa host key is known" in lowered
     ):
         return ErrorCode.SSH_HOST_KEY_UNKNOWN
-    if "permission denied" in lowered or "authentication failed" in lowered:
+    if "permission denied (publickey" in lowered or "authentication failed" in lowered:
         return ErrorCode.SSH_AUTHENTICATION_FAILED
+    if "permission denied" in lowered:
+        return ErrorCode.SSH_REMOTE_PERMISSION_DENIED
     if exit_code is not None:
         return ErrorCode.SSH_REMOTE_COMMAND_FAILED
     return ErrorCode.SSH_PROCESS_ERROR
@@ -224,6 +246,7 @@ def _safe_stderr(error_code: ErrorCode, raw: str) -> str:
         ErrorCode.SSH_HOST_KEY_MISMATCH: "host key changed",
         ErrorCode.SSH_AUTHENTICATION_FAILED: "authentication failed",
         ErrorCode.SSH_REMOTE_COMMAND_FAILED: "remote command failed",
+        ErrorCode.SSH_REMOTE_PERMISSION_DENIED: "remote read permission denied",
         ErrorCode.SSH_PROCESS_ERROR: "SSH process error",
         ErrorCode.SSH_EXECUTABLE_NOT_FOUND: "SSH executable unavailable",
         ErrorCode.SSH_COMMAND_TIMEOUT: "remote command timed out",

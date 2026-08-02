@@ -26,6 +26,7 @@ class ErrorCode(StrEnum):
     SSH_HOST_KEY_MISMATCH = "SSH_HOST_KEY_MISMATCH"
     SSH_AUTHENTICATION_FAILED = "SSH_AUTHENTICATION_FAILED"
     SSH_REMOTE_COMMAND_FAILED = "SSH_REMOTE_COMMAND_FAILED"
+    SSH_REMOTE_PERMISSION_DENIED = "SSH_REMOTE_PERMISSION_DENIED"
     SSH_COMMAND_TIMEOUT = "SSH_COMMAND_TIMEOUT"
     SSH_OUTPUT_TRUNCATED = "SSH_OUTPUT_TRUNCATED"
     SSH_PROCESS_ERROR = "SSH_PROCESS_ERROR"
@@ -72,6 +73,7 @@ _MESSAGES = {
     ErrorCode.SSH_HOST_KEY_MISMATCH: "Ключ SSH-сервера изменился.",
     ErrorCode.SSH_AUTHENTICATION_FAILED: "SSH-аутентификация не удалась.",
     ErrorCode.SSH_REMOTE_COMMAND_FAILED: "Удалённая команда завершилась с ошибкой.",
+    ErrorCode.SSH_REMOTE_PERMISSION_DENIED: "Удалённая read-only операция не имеет прав на чтение.",
     ErrorCode.SSH_COMMAND_TIMEOUT: "Истекло время выполнения удалённой команды.",
     ErrorCode.SSH_OUTPUT_TRUNCATED: "Вывод удалённой команды был ограничен.",
     ErrorCode.SSH_PROCESS_ERROR: "Ошибка системного SSH-процесса.",

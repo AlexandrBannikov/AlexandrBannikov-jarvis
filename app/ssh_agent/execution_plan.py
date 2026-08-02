@@ -15,6 +15,7 @@ ALLOWED_EXECUTABLES = frozenset(
         "/usr/bin/journalctl",
         "/usr/bin/ps",
         "/usr/bin/systemctl",
+        "/usr/bin/env",
     }
 )
 ALLOWED_PLAN_OPERATIONS = frozenset(
@@ -29,12 +30,17 @@ ALLOWED_PLAN_OPERATIONS = frozenset(
         "project_git_status",
         "project_last_commit",
         "top_processes",
+        "crypto_runtime_health",
+        "crypto_strategy_lab",
+        "crypto_equity_history",
+        "crypto_latest_decision",
+        "crypto_scored_aggregate",
     }
 )
 MAX_ARGV_COUNT = 32
 MAX_ARGUMENT_LENGTH = 4096
 MAX_TIMEOUT_SECONDS = 30
-MAX_STDOUT_LIMIT_BYTES = 512 * 1024
+MAX_STDOUT_LIMIT_BYTES = 1024 * 1024
 MAX_STDERR_LIMIT_BYTES = 64 * 1024
 MAX_OUTPUT_LINES = 1_000
 MAX_COMPOSITE_CHILDREN = 34
@@ -183,6 +189,14 @@ def validate_execution_plan(
             or isinstance(limit, bool)
             or not isinstance(limit, int)
             or not 1 <= limit <= 30
+        ):
+            raise _unsafe()
+    if plan.operation.startswith("crypto_"):
+        if plan.metadata.get("crypto") is not True:
+            raise _unsafe()
+        if plan.argv[:4] != (
+            "/usr/bin/env", "-C", "/opt/crypto-bot",
+            "/opt/crypto-bot/venv/bin/python",
         ):
             raise _unsafe()
 

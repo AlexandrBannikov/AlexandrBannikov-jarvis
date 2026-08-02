@@ -82,6 +82,14 @@ DOCUMENTS_SESSION_TTL_HOURS=24
 DOCUMENTS_MAX_ACTIVE_PER_USER=20
 DOCUMENTS_MAX_CONTEXT_CHARS=50000
 DOCUMENTS_MAX_CHUNKS_PER_REQUEST=12
+CRYPTO_CONTROL_ENABLED=false
+CRYPTO_CONTROL_HOST=crypto
+CRYPTO_CONTROL_CACHE_SECONDS=30
+CRYPTO_CONTROL_TIMEOUT_SECONDS=20
+CRYPTO_CONTROL_MAX_OUTPUT_BYTES=1048576
+CRYPTO_CONTROL_ALLOWED_PERIODS=24h,7d,14d,30d,all
+CRYPTO_CONTROL_IDEAS_ENABLED=true
+CRYPTO_CONTROL_CODEX_PROMPTS_ENABLED=true
 
 # Deprecated compatibility settings; production SSH uses the Agent settings below.
 JARVIS_SSH_MODE=real
@@ -467,6 +475,20 @@ def validate(
         except Exception:
             report.fail("Document storage, database, dependencies and limits")
     else:report.warn("Documents disabled")
+    if config is not None and config.crypto_control_enabled:
+        try:
+            if not config.ssh_enabled:raise ValueError
+            deps=build_ssh_dependencies(enabled=True,config_path=config.ssh_servers_config_path)
+            server=deps.registry.get_server(config.crypto_control_host)
+            project=deps.registry.get_project(config.crypto_control_host,"crypto-bot")
+            if str(project.path)!="/opt/crypto-bot":raise ValueError
+            from app.crypto_control.operations import CryptoOperationRegistry
+            operations=CryptoOperationRegistry(config.crypto_control_host,config.crypto_control_timeout_seconds,config.crypto_control_max_output_bytes)
+            report.pass_(f"Crypto Control fixed operations: {len(operations.names())}")
+            report.pass_("Crypto Control host alias and project allowlist")
+            report.pass_("Crypto Control cache, timeout, output and period limits")
+        except Exception:report.fail("Crypto Control SSH registry and fixed operations")
+    else:report.warn("Crypto Control disabled")
     # hosts.yaml belongs to the deprecated pre-Agent SSH implementation. Keep it
     # on disk for compatibility, but do not make production readiness depend on it.
     if paths.hosts_file.is_file():

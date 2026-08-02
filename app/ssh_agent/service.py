@@ -46,6 +46,7 @@ _SAFE_MESSAGES = {
     ErrorCode.SSH_AUTHENTICATION_FAILED: "SSH-аутентификация не прошла.",
     ErrorCode.SSH_COMMAND_TIMEOUT: "Проверка заняла слишком много времени и была остановлена.",
     ErrorCode.SSH_REMOTE_COMMAND_FAILED: "Удалённая проверка завершилась с ошибкой.",
+    ErrorCode.SSH_REMOTE_PERMISSION_DENIED: "Удалённая read-only проверка не имеет прав на чтение.",
     ErrorCode.SSH_OUTPUT_TRUNCATED: "Часть вывода была сокращена.",
     ErrorCode.SSH_PROCESS_ERROR: "SSH-проверка временно недоступна.",
     ErrorCode.SSH_CONFIG_MISSING: "SSH-инструменты недоступны: конфигурация отсутствует.",

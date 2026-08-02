@@ -40,6 +40,7 @@ ROLE_CAPABILITIES = {OWNER: CAPABILITIES, FAMILY_USER: FAMILY_CAPABILITIES}
 TECHNICAL_TOOL_PREFIXES = (
     "get_server_", "get_service_", "get_project_", "list_ssh_",
     "list_server_", "remote_",
+    "get_crypto_", "compare_crypto_", "suggest_crypto_", "prepare_crypto_",
 )
 TECHNICAL_TOOL_NAMES = frozenset({"system_info", "get_top_processes"})
 

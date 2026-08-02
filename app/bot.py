@@ -51,6 +51,10 @@ from app.health import set_family_access_health_provider
 from app.documents import DocumentService, DocumentSessionStorage
 from app.documents.tools import register_document_tools
 from app.health import set_document_health_provider
+from app.crypto_control import CryptoControlService, CryptoOperationRegistry
+from app.crypto_control.service import CryptoRemoteClient
+from app.crypto_control.tools import register_crypto_tools
+from app.health import set_crypto_health_provider
 
 logger = logging.getLogger(__name__)
 
@@ -176,6 +180,14 @@ def build_application(config: Config) -> Application:
     application.bot_data["ssh_service"] = ssh_dependencies.service
     application.bot_data["ssh_dependencies"] = ssh_dependencies
     set_ssh_health_provider(ssh_dependencies)
+    crypto_service=None
+    if config.crypto_control_enabled:
+        crypto_operations=CryptoOperationRegistry(config.crypto_control_host,config.crypto_control_timeout_seconds,config.crypto_control_max_output_bytes)
+        crypto_remote=CryptoRemoteClient(ssh_dependencies.registry,crypto_operations,ssh_service=ssh_dependencies.service,cache_seconds=config.crypto_control_cache_seconds)
+        crypto_service=CryptoControlService(crypto_remote,ideas_enabled=config.crypto_control_ideas_enabled,codex_prompts_enabled=config.crypto_control_codex_prompts_enabled)
+        register_crypto_tools(tool_manager.registry,crypto_service)
+    application.bot_data["crypto_control_service"]=crypto_service
+    set_crypto_health_provider(crypto_service,enabled=config.crypto_control_enabled,host_configured=(crypto_service is not None),operations_registered=(len(crypto_operations.names()) if crypto_service else 0))
     reminder_service = None
     reminder_scheduler = None
     if config.reminders_enabled:

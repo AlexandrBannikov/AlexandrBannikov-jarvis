@@ -17,6 +17,10 @@ _LOCATION_STORAGE = None
 _FAMILY_ACCESS_STORAGE = None
 _DOCUMENT_SERVICE = None
 _DOCUMENTS_ENABLED = False
+_CRYPTO_SERVICE=None
+_CRYPTO_ENABLED=False
+_CRYPTO_HOST_CONFIGURED=False
+_CRYPTO_OPERATIONS=0
 
 
 def set_reminder_health_provider(provider, *, enabled: bool, storage=None) -> None:
@@ -50,6 +54,9 @@ def set_family_access_health_provider(storage) -> None:
 def set_document_health_provider(service, *, enabled: bool) -> None:
     global _DOCUMENT_SERVICE, _DOCUMENTS_ENABLED
     _DOCUMENT_SERVICE=service;_DOCUMENTS_ENABLED=enabled
+def set_crypto_health_provider(service,*,enabled:bool,host_configured:bool,operations_registered:int)->None:
+    global _CRYPTO_SERVICE,_CRYPTO_ENABLED,_CRYPTO_HOST_CONFIGURED,_CRYPTO_OPERATIONS
+    _CRYPTO_SERVICE=service;_CRYPTO_ENABLED=enabled;_CRYPTO_HOST_CONFIGURED=host_configured;_CRYPTO_OPERATIONS=operations_registered
 
 
 def health_payload() -> dict[str, object]:
@@ -92,6 +99,13 @@ def health_payload() -> dict[str, object]:
         "expired_documents_pending_cleanup": 0,
         "last_document_error_code": None,
         "cleanup_running": False,
+        "crypto_control_enabled":_CRYPTO_ENABLED,
+        "crypto_host_configured":_CRYPTO_HOST_CONFIGURED,
+        "crypto_operations_registered":_CRYPTO_OPERATIONS,
+        "last_crypto_check_at":None,
+        "last_crypto_check_status":"never",
+        "last_crypto_error_code":None,
+        "crypto_cache_entries":0,
     }
     if _REMINDERS_ENABLED and _REMINDER_STORAGE is not None:
         try:
@@ -167,6 +181,9 @@ def health_payload() -> dict[str, object]:
             payload.update({"document_storage_ok":_DOCUMENT_SERVICE.storage.storage_path.is_dir(),"document_database_ok":_DOCUMENT_SERVICE.storage.validate_schema(),"active_documents_count":metrics["active"],"expired_documents_pending_cleanup":metrics["expired"],"last_document_error_code":_DOCUMENT_SERVICE.last_error_code,"cleanup_running":_DOCUMENT_SERVICE.cleanup_running})
         except Exception:
             payload["document_storage_ok"]=False;payload["document_database_ok"]=False;payload["last_document_error_code"]="HEALTH_DOCUMENT_ERROR"
+    if _CRYPTO_SERVICE is not None:
+        remote=_CRYPTO_SERVICE.remote
+        payload.update({"last_crypto_check_at":remote.last_check_at,"last_crypto_check_status":remote.last_status,"last_crypto_error_code":remote.last_error_code,"crypto_cache_entries":remote.cache_entries()})
     return payload
 
 

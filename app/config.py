@@ -75,6 +75,14 @@ class Config:
     documents_max_active_per_user: int = 20
     documents_max_context_chars: int = 50_000
     documents_max_chunks_per_request: int = 12
+    crypto_control_enabled: bool = False
+    crypto_control_host: str = "crypto"
+    crypto_control_cache_seconds: int = 30
+    crypto_control_timeout_seconds: int = 20
+    crypto_control_max_output_bytes: int = 1_048_576
+    crypto_control_allowed_periods: tuple[str, ...] = ("24h","7d","14d","30d","all")
+    crypto_control_ideas_enabled: bool = True
+    crypto_control_codex_prompts_enabled: bool = True
 
 
 def _parse_boolean(value: str, name: str) -> bool:
@@ -181,6 +189,12 @@ def load_config(environment: Mapping[str, str] | None = None) -> Config:
         ZoneInfo(reminders_timezone)
     except ZoneInfoNotFoundError as error:
         raise RuntimeError("REMINDERS_DEFAULT_TIMEZONE is invalid") from error
+    crypto_host=values.get("CRYPTO_CONTROL_HOST","crypto").strip() or "crypto"
+    if not crypto_host[0].isalnum() or any(c not in "abcdefghijklmnopqrstuvwxyz0123456789_-" for c in crypto_host):
+        raise RuntimeError("CRYPTO_CONTROL_HOST must be a registry alias")
+    crypto_periods=tuple(x.strip() for x in values.get("CRYPTO_CONTROL_ALLOWED_PERIODS","24h,7d,14d,30d,all").split(",") if x.strip())
+    if not crypto_periods or len(set(crypto_periods))!=len(crypto_periods) or not set(crypto_periods)<= {"24h","7d","14d","30d","all"}:
+        raise RuntimeError("CRYPTO_CONTROL_ALLOWED_PERIODS is invalid")
     return Config(
         telegram_bot_token=token,
         llm_provider=provider,
@@ -335,4 +349,12 @@ def load_config(environment: Mapping[str, str] | None = None) -> Config:
         documents_max_active_per_user=_parse_bounded_int(values.get("DOCUMENTS_MAX_ACTIVE_PER_USER", "20"), "DOCUMENTS_MAX_ACTIVE_PER_USER", 1, 100),
         documents_max_context_chars=_parse_bounded_int(values.get("DOCUMENTS_MAX_CONTEXT_CHARS", "50000"), "DOCUMENTS_MAX_CONTEXT_CHARS", 1000, 200000),
         documents_max_chunks_per_request=_parse_bounded_int(values.get("DOCUMENTS_MAX_CHUNKS_PER_REQUEST", "12"), "DOCUMENTS_MAX_CHUNKS_PER_REQUEST", 1, 50),
+        crypto_control_enabled=_parse_boolean(values.get("CRYPTO_CONTROL_ENABLED","false"),"CRYPTO_CONTROL_ENABLED"),
+        crypto_control_host=crypto_host,
+        crypto_control_cache_seconds=_parse_bounded_int(values.get("CRYPTO_CONTROL_CACHE_SECONDS","30"),"CRYPTO_CONTROL_CACHE_SECONDS",1,300),
+        crypto_control_timeout_seconds=_parse_bounded_int(values.get("CRYPTO_CONTROL_TIMEOUT_SECONDS","20"),"CRYPTO_CONTROL_TIMEOUT_SECONDS",1,30),
+        crypto_control_max_output_bytes=_parse_bounded_int(values.get("CRYPTO_CONTROL_MAX_OUTPUT_BYTES","1048576"),"CRYPTO_CONTROL_MAX_OUTPUT_BYTES",1024,1048576),
+        crypto_control_allowed_periods=crypto_periods,
+        crypto_control_ideas_enabled=_parse_boolean(values.get("CRYPTO_CONTROL_IDEAS_ENABLED","true"),"CRYPTO_CONTROL_IDEAS_ENABLED"),
+        crypto_control_codex_prompts_enabled=_parse_boolean(values.get("CRYPTO_CONTROL_CODEX_PROMPTS_ENABLED","true"),"CRYPTO_CONTROL_CODEX_PROMPTS_ENABLED"),
     )

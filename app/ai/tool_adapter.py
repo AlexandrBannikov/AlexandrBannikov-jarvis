@@ -68,7 +68,8 @@ class ToolAdapter:
         if missing:
             raise ToolCallValidationError("Required tool argument is missing")
         for name, value in arguments.items():
-            expected = properties[name].get("type")
+            property_schema = properties[name]
+            expected = property_schema.get("type")
             if expected == "string":
                 if not isinstance(value, str) or not value.strip():
                     raise ToolCallValidationError(
@@ -88,6 +89,13 @@ class ToolAdapter:
                 raise ToolCallValidationError(
                     "Tool argument has an invalid type"
                 )
+            if "enum" in property_schema and value not in property_schema["enum"]:
+                raise ToolCallValidationError("Tool argument is outside the allowlist")
+            if expected in {"integer", "number"}:
+                if "minimum" in property_schema and value < property_schema["minimum"]:
+                    raise ToolCallValidationError("Tool argument is below the minimum")
+                if "maximum" in property_schema and value > property_schema["maximum"]:
+                    raise ToolCallValidationError("Tool argument exceeds the maximum")
         try:
             tool.validate_arguments(arguments)
         except Exception as error:
