@@ -1,5 +1,6 @@
 """Tests for ToolManager."""
 
+import logging
 from unittest.mock import Mock
 
 from app.tools.manager import ToolManager
@@ -62,3 +63,24 @@ def test_manager_rejects_non_dict_result() -> None:
     assert result.success is False
     assert result.error is not None
     assert "must return a dict" in result.error
+
+
+def test_manager_logs_structured_domain_error_without_traceback(caplog) -> None:
+    class DomainError(RuntimeError):
+        code = "permission_denied"
+        user_message = "Нет прав на чтение данных."
+
+    tool = Mock()
+    tool.name = "structured"
+    tool.execute.side_effect = DomainError("private internal detail")
+    manager = make_manager(tool)
+
+    with caplog.at_level(logging.WARNING, logger="app.tools.manager"):
+        result = manager.execute("structured")
+
+    assert result.success is False
+    assert result.error == "permission_denied"
+    assert result.message == "Нет прав на чтение данных."
+    assert "error_type=permission_denied" in caplog.text
+    assert "Traceback" not in caplog.text
+    assert "private internal detail" not in caplog.text

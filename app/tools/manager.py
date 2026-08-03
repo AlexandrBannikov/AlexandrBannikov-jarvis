@@ -1,6 +1,7 @@
 """Safe execution facade for registered tools."""
 
 import logging
+import re
 import time
 from typing import Any
 
@@ -45,6 +46,22 @@ class ToolManager:
             duration_ms = round(
                 (time.monotonic() - started_at) * 1_000, 3
             )
+            domain_code = str(getattr(error, "code", "") or "")
+            if re.fullmatch(r"[A-Za-z0-9_]{1,64}", domain_code):
+                logger.warning(
+                    "Tool execution failed: tool=%s duration_ms=%.3f error_type=%s",
+                    name, duration_ms, domain_code,
+                )
+                return ToolResult(
+                    success=False,
+                    tool=name,
+                    data={},
+                    message=str(
+                        getattr(error, "user_message", "Tool execution failed.")
+                    )[:500],
+                    duration_ms=duration_ms,
+                    error=domain_code,
+                )
             logger.exception(
                 "Tool execution failed: tool=%s duration_ms=%.3f",
                 name,
