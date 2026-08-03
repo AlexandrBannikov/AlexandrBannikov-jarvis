@@ -7,6 +7,8 @@ import json
 
 from .capabilities import CAPABILITIES
 from .router import UniversalRequestRouter
+from .quality import DEFAULT_HOLDOUT, evaluate
+from .projects import safe_registry
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -34,11 +36,16 @@ def main(argv: list[str] | None = None) -> int:
         payload = {name: {"description": item.description, "external": item.external,
                           "personal": item.personal} for name, item in CAPABILITIES.items()}
     else:
-        probes = ("Как погода?", "Проверь crypto-bot", "Что такое SSH?")
-        router = UniversalRequestRouter()
-        decisions = [router.classify(text, location_available=True) for text in probes]
-        payload = {"valid": all(item.can_answer for item in decisions),
-                   "capabilities_count": len(CAPABILITIES)}
+        quality = evaluate(UniversalRequestRouter(), DEFAULT_HOLDOUT)
+        payload = {
+            "valid": quality.ok,
+            "holdout_score": quality.score,
+            "current_info_recall": quality.current_info_recall,
+            "stable_false_search_rate": quality.stable_false_search_rate,
+            "private_search_leakage_count": quality.private_search_leakage_count,
+            "capabilities_count": len(CAPABILITIES),
+            "projects": safe_registry(),
+        }
     if args.as_json:
         print(json.dumps(payload, ensure_ascii=False, indent=2))
     elif isinstance(payload, dict):

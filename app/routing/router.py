@@ -1,236 +1,228 @@
-"""Deterministic safety envelope around semantic model/tool routing."""
-
+"""Compositional source-of-truth router with fail-closed project boundaries."""
 from __future__ import annotations
 
-import re
 from collections.abc import Iterable
+import re
 
 from .capabilities import validate_capabilities
 from .models import AnswerGroundingStatus, RequestFreshness, RequestIntent, RoutingDecision, ToolExecutionPlan
+from .policy import policy_for
 
 
-def _matches(text: str, *patterns: str) -> bool:
+def _words(text: str) -> set[str]:
+    return set(re.findall(r"[a-zа-яё0-9+#.-]+", text.casefold()))
+
+
+def _stem(words: set[str], *prefixes: str) -> bool:
+    return any(word.startswith(prefix) for word in words for prefix in prefixes)
+
+
+def _contains(text: str, *patterns: str) -> bool:
     return any(re.search(pattern, text, re.IGNORECASE) for pattern in patterns)
 
 
-def _has_explicit_place(text: str) -> bool:
-    return bool(re.search(
-        r"\b(?:в|во|для|на)\s+(?!(?:реке|городе|районе|улице|дороге)\b)"
-        r"[\w.-]+",
-        text, re.IGNORECASE,
-    ))
+class SemanticFeatures:
+    """General linguistic/domain features, independent of regression phrases."""
+
+    def __init__(self, text: str) -> None:
+        self.text = text
+        self.words = _words(text)
+
+    @property
+    def temporal(self) -> bool:
+        return _stem(self.words, "сейчас", "сегодня", "завтра", "вчера", "текущ", "актуальн", "свеж", "последн", "ближайш", "новейш")
+
+    @property
+    def stable_framing(self) -> bool:
+        return _stem(self.words, "почему", "объясн", "определ", "истори", "формул", "измер") or _contains(self.text, r"\b(?:что такое|как (?:работает|устроен|рассчитать|сделать))\b")
+
+    @property
+    def explicit_research(self) -> bool:
+        return _stem(self.words, "найд", "поищ", "исслед", "источник") or _contains(self.text, r"\b(?:в интернете|по открытым источникам)\b")
+
+    @property
+    def public_dynamic_domain(self) -> bool:
+        return (
+            _stem(self.words, "погод", "температур", "осад", "дожд", "снег", "гроз", "бур", "гидролог", "уров", "вод", "переправ", "пробк", "рядом")
+            or _stem(self.words, "цен", "курс", "котиров", "капитализац", "акци", "валют")
+            or bool(self.words & {"eth", "btc", "bitcoin", "ethereum", "доллар", "евро", "юань"})
+            or _stem(self.words, "новост", "событ", "произош", "матч", "игр", "турнир", "счёт", "спорт", "результат", "выигр", "побед", "расписан", "рейс", "поезд")
+            or _stem(self.words, "верси", "релиз", "обновлен", "закон", "правил", "требован", "президент", "тариф", "налог", "регламент")
+            or _stem(self.words, "открыт", "закрыт", "работ", "налич", "доступ", "перекрыт")
+        )
+
+    @property
+    def location_dependent(self) -> bool:
+        return _stem(self.words, "погод", "температур", "осад", "дожд", "снег", "гроз", "бур", "гидролог", "уров", "вод", "переправ", "пробк", "рядом")
+
+    @property
+    def realtime_domain(self) -> bool:
+        return (
+            self.location_dependent
+            or _stem(self.words, "новост", "событ", "матч", "игр", "турнир", "счёт", "результат", "выигр", "побед")
+            or _stem(self.words, "цен", "курс", "котиров", "капитализац")
+            or bool(self.words & {"eth", "btc", "bitcoin", "ethereum", "доллар", "евро", "юань"})
+        )
+
+    @property
+    def explicit_place(self) -> bool:
+        return bool(re.search(r"\b(?:в|во|на|для)\s+[А-ЯЁA-Z][\w.-]+", self.text))
+
+    @property
+    def write_action(self) -> bool:
+        return _stem(self.words, "исправ", "измени", "запиш", "удал", "созда", "примен", "перезапуст", "рестарт", "задепло", "deploy", "commit", "push", "chmod", "chown", "setfacl")
+
+    @property
+    def external_project(self) -> str | None:
+        normalized = self.text.casefold()
+        if re.search(r"\bcrypto[- ]?bot\b", normalized): return "crypto-bot"
+        if re.search(r"\b(?:fin[- ]?)?vpn[- ]?bot\b", normalized): return "fin-vpn-bot"
+        return None
+
+    @property
+    def crypto_runtime(self) -> bool:
+        project = self.external_project == "crypto-bot"
+        runtime = _stem(self.words, "состоян", "статус", "позици", "баланс", "equity", "pnl", "score", "confidence", "candidate", "production", "сделк", "свеч", "runtime", "health", "решен")
+        bot_context = project or _stem(self.words, "бот")
+        return (bot_context and (runtime or _stem(self.words, "проверь", "покаж"))) or _stem(self.words, "equity", "pnl", "confidence") or (_stem(self.words, "позици") and _stem(self.words, "активн"))
+
+    @property
+    def direct_location(self) -> bool:
+        return _stem(self.words, "геолокац", "часов") or _contains(self.text, r"\bгде я\b", r"\bкоторый час\b")
+
+    @property
+    def server_runtime(self) -> bool:
+        if self.stable_framing and not self.temporal:
+            return False
+        action = _stem(self.words, "покаж", "проверь", "статус", "состоян", "нагруз", "груз", "использ", "uptime")
+        target = _stem(self.words, "сервер", "systemd", "сервис", "процесс", "памят", "cpu", "диск")
+        return (action and target) or (_stem(self.words, "лог") and _stem(self.words, "покаж", "проверь", "последн"))
+
+    @property
+    def ambiguous(self) -> bool:
+        short = len(self.words) <= 5
+        deictic = bool(self.words & {"это", "там", "туда", "так", "бот"}) or _stem(
+            self.words, "эт", "там", "вот"
+        )
+        underspecified_subject = _stem(self.words, "дел") and _stem(self.words, "бот")
+        continuation = self.text.casefold().strip() in {"а завтра?", "а сейчас?", "и что?"}
+        return short and (deictic or underspecified_subject or continuation) and not self.crypto_runtime
 
 
 class CurrentInformationPolicy:
-    """Recognize public facts whose correct value can change over time."""
+    """Compatibility facade over semantic freshness/source features."""
 
-    _STABLE_FRAMING = (
-        r"\b(?:что\s+такое|почему|как\s+(?:работает|устроен|рассчитать)|"
-        r"объясни|история|определение|формула)\b",
-    )
-    _VOLATILE_FACT = (
-        r"\b(?:погод|температур|дожд|снег|ливень|мороз|жарко|холодно)\w*",
-        r"\b(?:новост|событи)\w*",
-        r"\b(?:цен[ауы]|сто(?:ит|имость)|курс|котиров|капитализац)\w*",
-        r"\b(?:доллар|евро|юан|рубл|bitcoin|биткоин|ethereum|эфир|eth|btc)\b",
-        r"\b(?:уровень|сколько)\s+воды\b|\bвод[аы]\s+в\s+(?:реке|[А-ЯЁ])",
-        r"\b(?:матч|игр[аы]|турнир|сч[её]т|выиграл|победил|результат)\w*",
-        r"\b(?:расписани|рейс|поезд|автобус|самол[её]т)\w*",
-        r"\b(?:пробк|трафик|дорог[аи]|перекрыт)\w*",
-        r"\b(?:открыт|закрыт|работает\s+ли|время\s+работы)\b",
-        r"\b(?:последн|свеж|новейш|актуальн)\w*\s+(?:верси|релиз|обновлен)\w*",
-        r"\b(?:верси|релиз|обновлен)\w*",
-        r"\b(?:в\s+наличии|доступен\s+ли|есть\s+ли\s+в\s+продаже)\b",
-    )
-    _TEMPORAL = (
-        r"\b(?:сейчас|сегодня|завтра|вчера|последн\w*|следующ\w*|"
-        r"актуальн\w*|текущ\w*|свеж\w*|на\s+данный\s+момент)\b",
-    )
-    _IMPLIED_CURRENT = (
-        r"\bкто\s+(?:выиграл|победил)\b",
-        r"\bкогда\s+следующ\w*\b",
-        r"\bоткрыт\s+ли\b",
-        r"\bкакая\s+температура\b",
-        r"\bкакой\s+уровень\s+воды\b",
-        r"\bсколько\s+воды\b",
-        r"\bчто\s+рядом(?:\s+со\s+мной)?\b",
-    )
-
-    def requires_current_data(
-        self, text: str, intents: Iterable[RequestIntent]
-    ) -> bool:
-        intent_set = set(intents)
-        if intent_set & {RequestIntent.DOCUMENT_QUESTION, RequestIntent.IMAGE_QUESTION}:
-            return False
-        private = intent_set & {
-            RequestIntent.CRYPTO_BOT_RUNTIME, RequestIntent.SERVER_RUNTIME,
-            RequestIntent.MEMORY_RECALL, RequestIntent.REMINDER_ACTION,
-        }
-        public_specialized = intent_set & {
-            RequestIntent.WEATHER, RequestIntent.NEWS, RequestIntent.FINANCE_MARKET,
-        }
-        if private and not public_specialized:
-            return False
-        if _matches(text, *self._STABLE_FRAMING) and not _matches(text, *self._TEMPORAL):
-            return False
-        if intent_set & {RequestIntent.WEATHER, RequestIntent.NEWS, RequestIntent.FINANCE_MARKET}:
-            return True
-        return _matches(text, *self._IMPLIED_CURRENT) or (
-            _matches(text, *self._VOLATILE_FACT)
-            and (_matches(text, *self._TEMPORAL) or self._current_value_question(text))
-        )
-
-    @staticmethod
-    def _current_value_question(text: str) -> bool:
-        return _matches(
-            text,
-            r"^(?:ка(?:кая|кой|кие)|сколько|кто|когда|где|есть\s+ли|"
-            r"открыт\s+ли|будет\s+ли|что\s+с)\b",
-        )
+    def requires_current_data(self, text: str, intents: Iterable[RequestIntent]) -> bool:
+        features = SemanticFeatures(text)
+        private = set(intents) & {RequestIntent.DOCUMENT, RequestIntent.IMAGE, RequestIntent.MEMORY, RequestIntent.REMINDER, RequestIntent.SSH_DIAGNOSTICS, RequestIntent.CRYPTO_CONTROL}
+        return not private and (features.explicit_research or (features.public_dynamic_domain and (features.temporal or not features.stable_framing)))
 
     @staticmethod
     def needs_saved_location(text: str) -> bool:
-        location_domain = _matches(
-            text,
-            r"\b(?:погод|температур|дожд|снег|пробк|трафик)\w*|"
-            r"\b(?:уровень\s+воды|сколько\s+воды|что\s+рядом|рядом\s+со\s+мной)\b",
-        )
-        explicit_place = _has_explicit_place(text)
-        return location_domain and not explicit_place
+        features = SemanticFeatures(text)
+        return features.location_dependent and not features.explicit_place
 
 
 class UniversalRequestRouter:
-    """Classify meaning and freshness; execution remains in the bounded agent."""
+    """Select required sources by meaning; never delegate safety to model prose."""
 
-    def classify(
-        self, text: str, *, location_available: bool = False,
-        document_available: bool = False, image_attached: bool = False,
-    ) -> RoutingDecision:
+    def classify(self, text: str, *, location_available: bool = False,
+                 document_available: bool = False, image_attached: bool = False) -> RoutingDecision:
         normalized = " ".join(str(text).strip().split())
-        intents = self._intents(normalized, document_available, image_attached)
-        current_policy = CurrentInformationPolicy()
-        if current_policy.requires_current_data(normalized, intents):
-            intents = [RequestIntent.CURRENT_INFORMATION, *intents]
-        freshness = self._freshness(normalized, intents)
+        features = SemanticFeatures(normalized)
+        semantic_intents = self._intents(features, False, False)
+        intents = self._intents(features, document_available, image_attached)
+        primary = intents[0]
+        location_intent = RequestIntent.LOCATION_AWARE_CURRENT_INFO in intents
+        needs_location = location_intent and not features.explicit_place and not location_available
+        clarification = "Уточните, о каком объекте или источнике идёт речь." if primary is RequestIntent.CONVERSATION and features.ambiguous else None
         capabilities: list[str] = []
-        location_source = None
-        needs_location = False
-
-        if RequestIntent.CURRENT_INFORMATION in intents and current_policy.needs_saved_location(normalized):
-            if location_available:
-                location_source = "saved"
-                capabilities.append("location")
-            else:
-                needs_location = True
-
+        sources: list[str] = []
         for intent in intents:
-            if intent is RequestIntent.WEATHER:
-                if RequestIntent.CURRENT_INFORMATION not in intents:
-                    capabilities.append("general_llm")
-                    continue
-                explicit_place = _has_explicit_place(normalized)
-                if explicit_place:
-                    capabilities.append("web_search")
-                    location_source = "explicit"
-                elif location_available:
-                    capabilities.extend(("location", "web_search"))
-                    location_source = "saved"
-                else:
-                    capabilities.append("location")
-                    needs_location = True
-            elif intent in {RequestIntent.NEWS, RequestIntent.FINANCE_MARKET}:
-                capabilities.append(
-                    "web_search" if RequestIntent.CURRENT_INFORMATION in intents
-                    else "general_llm"
-                )
-            elif intent is RequestIntent.CURRENT_INFORMATION:
-                capabilities.append("web_search")
-            elif intent is RequestIntent.CRYPTO_BOT_RUNTIME:
-                capabilities.append("crypto_control")
-            elif intent is RequestIntent.SERVER_RUNTIME:
-                capabilities.append("ssh")
-            elif intent in {RequestIntent.DOCUMENT_QUESTION, RequestIntent.IMAGE_QUESTION}:
-                capabilities.append("documents")
-            elif intent is RequestIntent.MEMORY_RECALL:
-                capabilities.append("memory")
-            elif intent is RequestIntent.REMINDER_ACTION:
-                capabilities.append("reminders")
-            elif intent in {RequestIntent.LOCATION_QUESTION, RequestIntent.TIMEZONE_QUESTION}:
-                capabilities.append("location")
-            else:
-                capabilities.append("general_llm")
-
+            policy = policy_for(intent)
+            capabilities.extend(policy.capabilities)
+            sources.append(policy.source)
         capabilities = list(dict.fromkeys(capabilities))
-        if RequestIntent.CURRENT_INFORMATION in intents:
-            capabilities = [item for item in capabilities if item != "general_llm"]
-        if any(item in intents for item in (RequestIntent.DOCUMENT_QUESTION, RequestIntent.IMAGE_QUESTION)):
-            capabilities = ["documents"]
+        if "location" in capabilities and "web_search" in capabilities:
+            capabilities = ["location", "web_search", *(
+                item for item in capabilities if item not in {"location", "web_search"}
+            )]
+        if primary in {RequestIntent.DOCUMENT, RequestIntent.IMAGE}:
+            capabilities = list(policy_for(primary).capabilities)
+        if features.direct_location and primary is RequestIntent.LOCATION_AWARE_CURRENT_INFO:
+            capabilities = ["location"]
+            needs_location = False
         if needs_location:
             capabilities = [item for item in capabilities if item != "web_search"]
-        # Personal/private sources are never replaced with public search.
-        fallback = {"web_search": "general_llm" if freshness is RequestFreshness.RECENT else None}
-        plan = tuple(ToolExecutionPlan(name, fallback=fallback.get(name)) for name in capabilities)
         if not validate_capabilities(capabilities):
             raise ValueError("routing produced an unknown capability")
-        grounding = self._grounding(capabilities)
+        can_answer = not needs_location and clarification is None
+        plan = tuple(ToolExecutionPlan(name, required=True, fallback=None) for name in capabilities)
+        semantic_primary = semantic_intents[0]
+        freshness = (
+            RequestFreshness.REALTIME
+            if RequestIntent.LOCATION_AWARE_CURRENT_INFO in semantic_intents or features.realtime_domain and semantic_primary is RequestIntent.CURRENT_PUBLIC_INFORMATION
+            else self._freshness(semantic_primary)
+        )
         return RoutingDecision(
             intents=tuple(intents), freshness=freshness,
             required_capabilities=tuple(capabilities), plan=plan,
-            can_answer=not needs_location, location_source=location_source,
-            needs_location=needs_location, grounding=grounding,
-            reason_codes=("LOCATION_REQUIRED",) if needs_location else (),
+            can_answer=can_answer,
+            location_source=("explicit" if features.explicit_place and location_intent else "saved" if location_available and location_intent else None),
+            needs_location=needs_location, grounding=self._grounding(capabilities),
+            reason_codes=(("EXTERNAL_PROJECT_WRITE_BLOCKED",) if primary is RequestIntent.UNSUPPORTED_ACTION else ("CLARIFICATION_REQUIRED",) if clarification else ("LOCATION_REQUIRED",) if needs_location else ()),
+            required_source_of_truth="+".join(dict.fromkeys(sources)),
+            clarification_question=clarification,
         )
 
-    def _intents(self, text: str, document: bool, image: bool) -> list[RequestIntent]:
+    @staticmethod
+    def _intents(features: SemanticFeatures, document: bool, image: bool) -> list[RequestIntent]:
+        if image: return [RequestIntent.IMAGE]
+        if document: return [RequestIntent.DOCUMENT]
+        if features.external_project and features.write_action:
+            return [RequestIntent.UNSUPPORTED_ACTION]
         found: list[RequestIntent] = []
-        checks: Iterable[tuple[RequestIntent, tuple[str, ...]]] = (
-            (RequestIntent.WEATHER, (
-                r"\bпогод\w*", r"\bпрогноз\s+погод",
-                r"\b(?:дожд|снег|ливень|мороз|жарко|холодно)\w*",
-                r"\bчто\s+надеть\b",
-            )),
-            (RequestIntent.NEWS, (r"\bновост\w*", r"что\s+произошло\s+сегодня")),
-            (RequestIntent.FINANCE_MARKET, (r"\b(?:ETH|BTC|акци\w*|курс\w*|котиров\w*)\b", r"сколько\s+(?:сейчас\s+)?стоит")),
-            (RequestIntent.CRYPTO_BOT_RUNTIME, (r"\bcrypto[- ]?bot\b", r"\b(?:мой|наш)\s+бот\b", r"\b(?:позици|equity|confidence|score|pnl)\w*\b")),
-            (RequestIntent.SERVER_RUNTIME, (r"\b(?:мой|моего|наш|нашего)\s+сервер\w*\b", r"\b(?:проверь|статус|состояние)\w*\s+сервер\w*\b", r"\b(?:диск|systemd|service|логи|нагрузк)\w*\b.*\bсервер")),
-            (RequestIntent.REMINDER_ACTION, (r"\bнапомни\w*", r"\bнапоминани\w*", r"\bотмени\w*.*\bнапомин")),
-            (RequestIntent.MEMORY_RECALL, (r"\bчто\s+ты\s+помнишь", r"\bвспомни\w*")),
-            (RequestIntent.LOCATION_QUESTION, (r"\b(?:моя|мою)\s+геолокаци", r"\bгде\s+я\b")),
-            (RequestIntent.TIMEZONE_QUESTION, (r"\bчасов\w*\s+пояс", r"\bкоторый\s+час\b")),
-            (RequestIntent.TRANSLATION, (r"\bперевед\w*", r"\bперевод\w*\s+(?:на|с)\b")),
-            (RequestIntent.PROMPT_CREATION, (r"\b(?:напиши|создай|составь)\w*\s+промпт",)),
-            (RequestIntent.WRITING, (r"\b(?:напиши|составь|перепиши)\w*\s+(?:текст|письмо|поздравлен|резюме)",)),
-            (RequestIntent.CALCULATION, (r"\bпосчитай\w*", r"\bсколько\s+будет\b")),
-            (RequestIntent.RECOMMENDATION, (r"\b(?:посоветуй|подбери|порекомендуй|что\s+лучше)\w*",)),
-        )
-        for intent, patterns in checks:
-            if _matches(text, *patterns): found.append(intent)
-        if image:
-            found.insert(0, RequestIntent.IMAGE_QUESTION)
-        elif document:
-            found.insert(0, RequestIntent.DOCUMENT_QUESTION)
+        words = features.words
+        if features.crypto_runtime: found.append(RequestIntent.CRYPTO_CONTROL)
+        elif features.server_runtime: found.append(RequestIntent.SSH_DIAGNOSTICS)
+        if _stem(words, "напомн", "напомин") or (_stem(words, "отмен", "перенес", "покаж") and _stem(words, "напомин")):
+            found.append(RequestIntent.REMINDER)
+        if _stem(words, "вспомн", "помн") or _contains(features.text, r"\bчто (?:мы|ты) решили\b"):
+            found.append(RequestIntent.MEMORY)
+        if features.direct_location:
+            found.append(RequestIntent.LOCATION_AWARE_CURRENT_INFO)
+        private_source_selected = bool(set(found) & {
+            RequestIntent.CRYPTO_CONTROL,
+            RequestIntent.SSH_DIAGNOSTICS,
+            RequestIntent.REMINDER,
+            RequestIntent.MEMORY,
+        })
+        explicit_multi_source = bool(words & {"и", "а"}) and features.public_dynamic_domain
+        current_public = (
+            features.public_dynamic_domain
+            and (not private_source_selected or explicit_multi_source)
+            or (features.temporal and not features.ambiguous and not private_source_selected)
+        ) and not (features.stable_framing and not features.temporal)
+        if current_public:
+            found.append(RequestIntent.CURRENT_PUBLIC_INFORMATION)
+            if features.location_dependent:
+                found.append(RequestIntent.LOCATION_AWARE_CURRENT_INFO)
+        elif features.explicit_research and not private_source_selected:
+            found.append(RequestIntent.WEB_RESEARCH)
+        if features.external_project and not found:
+            found.append(RequestIntent.PROJECT_ANALYSIS)
         if not found:
-            if _matches(text, r"\b(?:найди\w*|поищи\w*)\b", r"\bпроверь\w*\s+(?:информац|актуальн)", r"\b(?:сейчас|сегодня|актуальн|последн\w*)\b"):
-                found.append(RequestIntent.CURRENT_INFORMATION)
-            elif _matches(text, r"\b(?:что\s+такое|почему|как\s+(?:устроен|работает|сделать|заменить))\b"):
-                found.append(RequestIntent.GENERAL_KNOWLEDGE)
-            elif _matches(text, r"\b(?:код|python|ssh|api|программир|ошибк)\w*\b"):
-                found.append(RequestIntent.TECHNICAL_HELP)
-            else:
-                found.append(RequestIntent.UNKNOWN)
+            conversation = features.ambiguous or _stem(words, "привет", "спасибо", "поговор")
+            found.append(RequestIntent.CONVERSATION if conversation else RequestIntent.GENERAL_KNOWLEDGE)
         return list(dict.fromkeys(found))
 
     @staticmethod
-    def _freshness(text: str, intents: list[RequestIntent]) -> RequestFreshness:
-        if any(item in {RequestIntent.CRYPTO_BOT_RUNTIME, RequestIntent.SERVER_RUNTIME, RequestIntent.REMINDER_ACTION} for item in intents):
+    def _freshness(intent: RequestIntent) -> RequestFreshness:
+        if intent in {RequestIntent.CRYPTO_CONTROL, RequestIntent.SSH_DIAGNOSTICS, RequestIntent.REMINDER}:
             return RequestFreshness.PERSONAL_RUNTIME
-        public_specialized = any(item in {RequestIntent.WEATHER, RequestIntent.NEWS, RequestIntent.FINANCE_MARKET} for item in intents)
-        stable_framing = _matches(text, *CurrentInformationPolicy._STABLE_FRAMING) and not _matches(text, *CurrentInformationPolicy._TEMPORAL)
-        if public_specialized and not stable_framing:
+        if intent is RequestIntent.LOCATION_AWARE_CURRENT_INFO:
             return RequestFreshness.REALTIME
-        if RequestIntent.CURRENT_INFORMATION in intents:
-            return RequestFreshness.RECENT
-        if _matches(text, r"\b(?:сейчас|сегодня|актуальн|последн\w*|новейш\w*|текущ\w*)\b", r"\bпроверь\w*\s+(?:информац|актуальн)"):
+        if intent in {RequestIntent.CURRENT_PUBLIC_INFORMATION, RequestIntent.WEB_RESEARCH}:
             return RequestFreshness.RECENT
         return RequestFreshness.STATIC
 
@@ -239,7 +231,6 @@ class UniversalRequestRouter:
         if len(capabilities) > 1: return AnswerGroundingStatus.MIXED
         if "web_search" in capabilities: return AnswerGroundingStatus.WEB_GROUNDED
         if "documents" in capabilities: return AnswerGroundingStatus.DOCUMENT_GROUNDED
-        if any(item in capabilities for item in ("ssh", "crypto_control", "reminders", "location")):
-            return AnswerGroundingStatus.PERSONAL_RUNTIME_GROUNDED
+        if any(item in capabilities for item in ("ssh", "crypto_control", "reminders", "location")): return AnswerGroundingStatus.PERSONAL_RUNTIME_GROUNDED
         if "memory" in capabilities: return AnswerGroundingStatus.MEMORY_ASSISTED
         return AnswerGroundingStatus.MODEL_KNOWLEDGE

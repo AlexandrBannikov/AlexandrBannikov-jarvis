@@ -43,6 +43,9 @@ from app.ssh_agent.tools import SSHServiceTool
 from app.conversation import ConversationManager, PendingQuestion
 from app.access import CapabilityPolicy, Principal, RateLimiter, OWNER
 from app.routing import AnswerCapabilityGuard, RequestFreshness, RequestIntent, UniversalRequestRouter
+from app.routing.audit import RoutingAudit, RoutingAuditEvent
+from app.routing.projects import EXTERNAL_WRITE_MESSAGE
+from app.routing.quality import DEFAULT_HOLDOUT, evaluate
 
 logger = logging.getLogger(__name__)
 audit_logger = logging.getLogger("jarvis.audit")
@@ -93,6 +96,10 @@ WEB_SEARCH_NOT_REGISTERED_MESSAGE = (
 CURRENT_INFO_ROUTING_MESSAGE = (
     "Не удалось построить маршрут для актуальных данных. "
     "Код: CURRENT_INFO_ROUTING_ERROR"
+)
+REQUIRED_TOOL_NOT_EXECUTED_MESSAGE = (
+    "Обязательный источник данных не был выполнен. "
+    "Код: REQUIRED_TOOL_NOT_EXECUTED"
 )
 WEB_SEARCH_SECRET_MESSAGE = (
     "Запрос содержит потенциальный секрет. Удалите или замените его перед "
@@ -170,6 +177,7 @@ class JarvisAgent:
         rate_limiter: RateLimiter | None = None,
         router: UniversalRequestRouter | None = None,
         web_search_max_attempts: int = 1,
+        routing_audit: RoutingAudit | None = None,
     ) -> None:
         if max_tool_rounds < 1:
             raise ValueError("max_tool_rounds must be positive")
@@ -188,11 +196,14 @@ class JarvisAgent:
         self.router = router or UniversalRequestRouter()
         self.answer_guard = AnswerCapabilityGuard()
         self.web_search_max_attempts = web_search_max_attempts
+        self.routing_audit = routing_audit or RoutingAudit()
+        self.routing_quality = evaluate(self.router, DEFAULT_HOLDOUT)
         self.last_routing_intent = "UNKNOWN"
         self.last_routing_capabilities_count = 0
         self.last_routing_status = "never"
         self.last_tool_fallback_code: str | None = None
         self.last_web_search_metadata = WebSearchExecutionMetadata()
+        self.last_route_explanation: dict[str, object] | None = None
 
     async def ask(
         self,
@@ -215,6 +226,14 @@ class JarvisAgent:
         trusted_principal = principal or Principal(user_id or 0, OWNER, "active")
         if not self.capability_policy.require(trusted_principal, "assistant.chat"):
             return "Доступ к этому боту предоставляется только по приглашению владельца."
+        if (
+            trusted_principal.role == OWNER
+            and re.search(
+                r"(?i)\bпочему\b.*\b(?:инструмент|источник|поиск|маршрут)\w*",
+                user_text,
+            )
+        ):
+            return self._routing_explanation()
         if (trusted_principal.role != OWNER
                 and _TECHNICAL_OPERATION.search(user_text)
                 and _TECHNICAL_ACTION.search(user_text)):
@@ -225,6 +244,7 @@ class JarvisAgent:
         web_search_was_used = False
         web_search_call_count = 0
         guard_retried = False
+        executed_capabilities: set[str] = set()
         self.last_web_search_metadata = WebSearchExecutionMetadata()
         ssh_context = self._ssh_context(
             user_id, chat_id, source_message_id, is_allowlisted
@@ -265,6 +285,28 @@ class JarvisAgent:
         self.last_routing_intent = decision.intent.value
         self.last_routing_capabilities_count = len(decision.required_capabilities)
         self.last_routing_status = "planned"
+        self.last_route_explanation = {
+            "intent": decision.intent.value,
+            "source": decision.required_source_of_truth,
+            "capability": ",".join(decision.required_capabilities) or "none",
+            "tool_executed": False,
+            "web_search": decision.requires_web_search,
+        }
+        self.routing_audit.record(RoutingAuditEvent(
+            correlation_id, decision.intent.value,
+            ",".join(decision.required_capabilities) or "NONE",
+            decision.required_source_of_truth, bool(decision.plan), False,
+            "PLANNED", "NONE", 0,
+        ))
+        if decision.intent is RequestIntent.UNSUPPORTED_ACTION:
+            self.routing_audit.external_project_write_attempts += 1
+            project = "Crypto-Bot" if "crypto" in effective_text.casefold() else "fin-vpn-bot"
+            path = "/opt/crypto-bot" if project == "Crypto-Bot" else "/opt/fin-vpn-bot"
+            self.last_routing_status = "blocked"
+            return EXTERNAL_WRITE_MESSAGE.format(project=project, project_path=path)
+        if decision.clarification_question:
+            self.last_routing_status = "needs_context"
+            return decision.clarification_question
         contains_secret = self._contains_potential_secret(effective_text)
         explicit_search = bool(_EXPLICIT_WEB_SEARCH.search(effective_text))
         search_required = decision.requires_web_search
@@ -432,7 +474,13 @@ class JarvisAgent:
                         allow_web=allow_web, principal=trusted_principal
                     )
                 ),
-                tool_choice="required" if search_required else "auto",
+                tool_choice=(
+                    "required"
+                    if search_required or set(decision.required_capabilities) & {
+                        "ssh", "crypto_control", "reminders",
+                    }
+                    else "auto"
+                ),
                 instructions=instructions,
                 correlation_id=correlation_id,
                 intent=decision.intent.value,
@@ -575,6 +623,30 @@ class JarvisAgent:
                         )
                         return WEB_SEARCH_NOT_EXECUTED_MESSAGE
                     if text:
+                        required_specialized = set(
+                            decision.required_capabilities
+                        ) & {"ssh", "crypto_control", "reminders"}
+                        if required_specialized - executed_capabilities:
+                            if not guard_retried:
+                                guard_retried = True
+                                response = await self._create_response(
+                                    input_items=[{"role": "user", "content": effective_text}],
+                                    tools=self._tool_schemas(
+                                        allow_web=False,
+                                        principal=trusted_principal,
+                                    ),
+                                    tool_choice="required",
+                                    instructions=instructions +
+                                    "\nОбязательный специализированный источник должен быть выполнен перед ответом.",
+                                    correlation_id=correlation_id,
+                                    intent=decision.intent.value,
+                                )
+                                continue
+                            error_type = "required_tool_not_executed"
+                            self.last_tool_fallback_code = (
+                                "REQUIRED_TOOL_NOT_EXECUTED"
+                            )
+                            return REQUIRED_TOOL_NOT_EXECUTED_MESSAGE
                         success = True
                         self.last_routing_status = "completed"
                         final_text = self._format_sources(text, sources)
@@ -609,6 +681,13 @@ class JarvisAgent:
                             correlation_id=correlation_id,
                         )
                     outputs.append(output)
+                    capability = self._capability_for_tool(
+                        str(_item_value(call, "name", ""))
+                    )
+                    if capability and self._tool_output_succeeded(output):
+                        executed_capabilities.add(capability)
+                        if self.last_route_explanation is not None:
+                            self.last_route_explanation["tool_executed"] = True
                     if conversation_key is not None:
                         self.conversation_manager.storage.append_message(
                             conversation_key, "tool", str(output.get("output", ""))[:1000], provenance="TOOL_RESULT"
@@ -618,7 +697,13 @@ class JarvisAgent:
                     tools=self._tool_schemas(
                         allow_web=allow_web, principal=trusted_principal
                     ),
-                    tool_choice="required" if search_required else "auto",
+                    tool_choice=(
+                        "required"
+                        if search_required or set(decision.required_capabilities) & {
+                            "ssh", "crypto_control", "reminders",
+                        }
+                        else "auto"
+                    ),
                     previous_response_id=raw_response_id,
                     instructions=instructions,
                     correlation_id=correlation_id,
@@ -738,6 +823,15 @@ class JarvisAgent:
             logger.exception("Unexpected Jarvis agent error")
             return "Произошла внутренняя ошибка. Попробуйте позже."
         finally:
+            self.routing_audit.record(RoutingAuditEvent(
+                correlation_id, decision.intent.value,
+                ",".join(decision.required_capabilities) or "NONE",
+                decision.required_source_of_truth, bool(decision.plan),
+                bool(executed_capabilities or web_search_was_used),
+                "COMPLETED" if success else "ERROR",
+                error_type.upper(),
+                int((time.monotonic() - started_at) * 1_000),
+            ))
             audit_logger.info(
                 "agent_request_finished correlation_id=%s user_id=%s tool_rounds=%d "
                 "success=%s error_type=%s duration_ms=%.3f "
@@ -757,6 +851,46 @@ class JarvisAgent:
                 str(self.last_web_search_metadata.fallback_used).lower(),
                 self.last_web_search_metadata.provider_error_code or "none",
             )
+
+    def _routing_explanation(self) -> str:
+        item = self.last_route_explanation
+        if not item:
+            return "Данных о предыдущем маршруте пока нет."
+        web = (
+            "использован как обязательный источник"
+            if item["web_search"]
+            else "не использовался: выбран другой источник истины"
+        )
+        return (
+            f"Intent: {item['intent']}\n"
+            f"Источник истины: {item['source']}\n"
+            f"Инструмент: {item['capability']}\n"
+            f"Tool выполнен: {'да' if item['tool_executed'] else 'нет'}\n"
+            f"Web Search: {web}."
+        )
+
+    @staticmethod
+    def _capability_for_tool(name: str) -> str | None:
+        if name.startswith((
+            "get_crypto_", "compare_crypto_", "suggest_crypto_",
+            "prepare_crypto_",
+        )):
+            return "crypto_control"
+        if name.startswith((
+            "get_server_", "get_service_", "get_project_", "list_ssh_",
+        )) or name in {"get_top_processes", "system_info", "remote_system_info", "remote_service_status"}:
+            return "ssh"
+        if "reminder" in name:
+            return "reminders"
+        return None
+
+    @staticmethod
+    def _tool_output_succeeded(output: dict[str, object]) -> bool:
+        try:
+            payload = json.loads(str(output.get("output", "")))
+        except (ValueError, TypeError):
+            return False
+        return isinstance(payload, dict) and payload.get("success") is True
 
     async def _create_response(self, **kwargs: Any) -> object:
         instructions = kwargs.pop("instructions", JARVIS_SYSTEM_PROMPT)
