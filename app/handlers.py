@@ -31,6 +31,7 @@ from zoneinfo import ZoneInfo
 from app.access import CapabilityPolicy, Principal, OWNER
 from app.documents.service import DocumentError
 from app.documents.validators import ValidationError
+from app.routing import RequestIntent, UniversalRequestRouter
 
 logger = logging.getLogger(__name__)
 START_MESSAGE = "Привет.\nЯ Jarvis.\nСистема запущена."
@@ -557,7 +558,21 @@ async def handle_text(
         if limiter is not None and not limiter.message(principal):
             await message.reply_text("Слишком много запросов. Попробуйте через минуту.")
             return
-        if reminder_service is not None:
+        location_service = context.application.bot_data.get("location_service")
+        location_available = bool(
+            location_service is not None and location_service.get(user_id)
+        )
+        preliminary_route = UniversalRequestRouter().classify(
+            prompt, location_available=location_available
+        )
+        # Keep the fast deterministic reminder path for a single action. A
+        # compound request must reach the agent so every independent part can
+        # run and report partial failures.
+        reminder_only = (
+            len(preliminary_route.intents) == 1
+            and preliminary_route.intent is RequestIntent.REMINDER_ACTION
+        )
+        if reminder_service is not None and reminder_only:
             try:
                 reminder_response = await asyncio.to_thread(
                     reminder_service.parse_and_handle,
