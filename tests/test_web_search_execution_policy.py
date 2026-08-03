@@ -39,7 +39,7 @@ CURRENT_QUERIES = (
 def test_active_document_does_not_hijack_current_information(query):
     route = UniversalRequestRouter().classify(query, location_available=True)
     assert "web_search" in route.required_capabilities
-    assert not _should_attach_document_context(route)
+    assert not _should_attach_document_context(route, query)
 
 
 PRIVATE_QUERIES = (
@@ -53,23 +53,32 @@ PRIVATE_QUERIES = (
 @pytest.mark.parametrize("query", PRIVATE_QUERIES)
 def test_active_document_does_not_hijack_private_capabilities(query):
     route = UniversalRequestRouter().classify(query, location_available=True)
-    assert not _should_attach_document_context(route)
+    assert not _should_attach_document_context(route, query)
 
 
 STABLE_DOCUMENT_QUERIES = (
-    "Кратко расскажи", "Сделай краткое резюме", "Объясни содержание",
+    "Кратко расскажи о документе", "Сделай резюме текста", "Объясни содержание текста",
     "Перечисли основные тезисы", "Укажи противоречия в тексте",
-    "Какой общий вывод?", "Что автор имеет в виду?", "Составь конспект",
-    "Выдели определения", "Сделай таблицу фактов", "Переведи текст",
-    "Исправь стиль текста", "Какие аргументы приведены?",
-    "Сравни разделы", "Объясни простыми словами",
+    "Какой общий вывод из документа?", "Что автор имеет в виду?", "Составь конспект текста",
+    "Выдели определения в тексте", "Сделай таблицу фактов из документа", "Переведи текст",
+    "Исправь стиль текста", "Какие аргументы приведены в документе?",
+    "Сравни разделы", "Объясни документ простыми словами",
 )
 
 
 @pytest.mark.parametrize("query", STABLE_DOCUMENT_QUERIES)
 def test_stable_questions_can_keep_active_document_context(query):
     route = UniversalRequestRouter().classify(query, location_available=True)
-    assert _should_attach_document_context(route)
+    assert _should_attach_document_context(route, query)
+
+
+@pytest.mark.parametrize(
+    "query",
+    ("Почему небо голубое?", "Что такое SSH?", "Как работает HTTP?", "2+2"),
+)
+def test_active_document_does_not_hijack_unrelated_stable_question(query):
+    route = UniversalRequestRouter().classify(query, location_available=True)
+    assert not _should_attach_document_context(route, query)
 
 
 REFUSALS = (
@@ -192,3 +201,21 @@ def test_current_information_without_search_capability_is_routing_error():
     answer = asyncio.run(agent.ask("Какие последние новости OpenAI?"))
     assert "CURRENT_INFO_ROUTING_ERROR" in answer
     assert agent.last_tool_fallback_code == "CURRENT_INFO_ROUTING_ERROR"
+
+
+def test_refusal_after_real_local_tool_attempt_does_not_trigger_guard_retry():
+    provider = Provider([
+        SimpleNamespace(
+            id="tool-response", output_text="", output=[{
+                "type": "function_call", "call_id": "call-1",
+                "name": "missing_tool", "arguments": "{}",
+            }],
+        ),
+        SimpleNamespace(id="final", output_text="Я не могу проверить.", output=[]),
+    ])
+    answer = asyncio.run(JarvisAgent(
+        provider, ToolManager(ToolRegistry()), run_sync=immediate,
+    ).ask("Проверь состояние", correlation_id="c" * 20))
+    assert answer == "Я не могу проверить."
+    assert len(provider.requests) == 2
+    assert all(request["correlation_id"] == "c" * 20 for request in provider.requests)

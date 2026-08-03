@@ -548,13 +548,17 @@ class JarvisAgent:
                             max_tool_calls=self.web_search_max_attempts,
                         )
                         continue
-                    if self.answer_guard.should_retry(text, decision, attempted=guard_retried):
+                    if self.answer_guard.should_retry(
+                        text, decision, attempted=guard_retried or rounds > 0
+                    ):
                         guard_retried = True
                         response = await self._create_response(
                             input_items=[{"role": "user", "content": effective_text}],
                             tools=self._tool_schemas(allow_web=allow_web, principal=trusted_principal),
                             tool_choice="required" if decision.required_capabilities != ("general_llm",) else "auto",
                             instructions=instructions + "\nНе отказывай преждевременно: используй доступную capability из плана.",
+                            correlation_id=correlation_id,
+                            intent=decision.intent.value,
                         )
                         continue
                     if search_required and not web_search_was_used:

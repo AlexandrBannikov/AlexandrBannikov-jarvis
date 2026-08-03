@@ -75,13 +75,21 @@ MAX_INPUT_LENGTH = 4_000
 TELEGRAM_MESSAGE_LIMIT = 4_096
 
 
-def _should_attach_document_context(route: object) -> bool:
+_DOCUMENT_REFERENCE = re.compile(
+    r"(?i)\b(?:документ|файл|таблиц|лист|страниц|текст[ае]?|автор|раздел|"
+    r"тезис|конспект|в\s+н[её]м|из\s+него|эт(?:от|ом)\s+(?:файл|документ|текст))\w*"
+)
+
+
+def _should_attach_document_context(route: object, text: str = "") -> bool:
     """Keep an active document from hijacking an unrelated routed request."""
     capabilities = set(getattr(route, "required_capabilities", ()) or ())
     private_or_current = {
         "web_search", "crypto_control", "ssh", "reminders", "memory", "location",
     }
-    return not bool(capabilities & private_or_current)
+    return not bool(capabilities & private_or_current) and bool(
+        _DOCUMENT_REFERENCE.search(text)
+    )
 
 
 def _message_type(update: Update) -> str:
@@ -636,7 +644,7 @@ async def handle_text(
                               is_allowlisted=bool(principal and principal.role == OWNER),
                               principal=principal, correlation_id=correlation_id)
             if document_service is not None and _should_attach_document_context(
-                preliminary_route
+                preliminary_route, prompt
             ):
                 page_match=re.search(r"(?i)страниц[аеы]?\s+(\d+)",prompt)
                 sheet_match=re.search(r"(?i)лист[ае]?\s+[«\"]?([^»\"?.]+)",prompt)
