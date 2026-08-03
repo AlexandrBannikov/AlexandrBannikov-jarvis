@@ -13,7 +13,8 @@ from .models import CryptoOverview,PositionStatus,public
 class CryptoControlError(RuntimeError):
     def __init__(self,code,message):super().__init__(message);self.code=code;self.user_message=message
 
-ERROR_MESSAGES={"SSH_CONNECTION_TIMEOUT":"SSH-соединение с crypto-сервером недоступно.","SSH_CONNECTION_REFUSED":"SSH-соединение с crypto-сервером недоступно.","SSH_AUTHENTICATION_FAILED":"SSH-соединение с crypto-сервером недоступно.","SSH_COMMAND_TIMEOUT":"Диагностический CLI превысил допустимое время выполнения.","SSH_REMOTE_COMMAND_FAILED":"Не удалось получить состояние crypto-bot.","SSH_REMOTE_PERMISSION_DENIED":"Нет прав на чтение runtime-данных crypto-bot.","SSH_OUTPUT_TRUNCATED":"Ответ диагностического CLI слишком большой.","invalid_json":"Диагностический CLI вернул повреждённый JSON.","output_too_large":"Ответ диагностического CLI слишком большой.","permission_denied":"Нет прав на чтение runtime-данных crypto-bot."}
+READ_PERMISSION_MESSAGE="Runtime недоступен.\n\nПричина:\nREAD_PERMISSION_DENIED\n\nНеобходимо предоставить monitor-пользователю доступ только на чтение."
+ERROR_MESSAGES={"SSH_CONNECTION_TIMEOUT":"SSH-соединение с crypto-сервером недоступно.","SSH_CONNECTION_REFUSED":"SSH-соединение с crypto-сервером недоступно.","SSH_AUTHENTICATION_FAILED":"SSH-соединение с crypto-сервером недоступно.","SSH_COMMAND_TIMEOUT":"Диагностический CLI превысил допустимое время выполнения.","SSH_REMOTE_COMMAND_FAILED":"Не удалось получить состояние crypto-bot.","SSH_REMOTE_PERMISSION_DENIED":READ_PERMISSION_MESSAGE,"SSH_OUTPUT_TRUNCATED":"Ответ диагностического CLI слишком большой.","invalid_json":"Диагностический CLI вернул повреждённый JSON.","output_too_large":"Ответ диагностического CLI слишком большой.","permission_denied":READ_PERMISSION_MESSAGE}
 
 class CryptoRemoteClient:
     def __init__(self,registry,operations,*,ssh_service=None,cache_seconds=30,error_cache_seconds=5,transport=execute):

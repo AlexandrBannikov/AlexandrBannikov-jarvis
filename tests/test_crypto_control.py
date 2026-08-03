@@ -15,6 +15,7 @@ from app.ssh_agent.models import ServerConfig,ProjectConfig,SSHAgentConfig
 from app.ssh_agent.registry import ServerRegistry
 from app.ssh_agent.service_models import SSHRequestContext
 from app.ssh_agent.transport_models import ExecutionResult
+from app.ssh_agent.errors import ErrorCode
 from app.tools.registry import ToolRegistry
 from app.ai.tool_adapter import ToolAdapter,ToolCallValidationError
 from app.config import load_config
@@ -105,11 +106,52 @@ async def test_secretlike_output_blocked():
  assert e.value.code=="SECRET_REDACTED" and r.last_status=="warning"
 @pytest.mark.asyncio
 async def test_error_short_cache():
- from app.ssh_agent.errors import ErrorCode
  t=FakeTransport(success=False,error=ErrorCode.SSH_COMMAND_TIMEOUT);r=CryptoRemoteClient(server_registry(),CryptoOperationRegistry(),transport=t)
  for _ in range(2):
   with pytest.raises(CryptoControlError):await r.fetch(context(),"crypto_runtime_health")
  assert t.calls==1
+
+@pytest.mark.asyncio
+async def test_read_allowed():
+ assert await CryptoRemoteClient(server_registry(),CryptoOperationRegistry(),transport=FakeTransport({"status":"ok"})).fetch(context(),"crypto_runtime_health")=={"status":"ok"}
+
+@pytest.mark.asyncio
+async def test_read_denied_has_actionable_message():
+ remote=CryptoRemoteClient(server_registry(),CryptoOperationRegistry(),transport=FakeTransport(success=False,error=ErrorCode.SSH_REMOTE_PERMISSION_DENIED))
+ with pytest.raises(CryptoControlError) as caught:await remote.fetch(context(),"crypto_runtime_health")
+ assert caught.value.code=="SSH_REMOTE_PERMISSION_DENIED"
+ assert caught.value.user_message=="Runtime недоступен.\n\nПричина:\nREAD_PERMISSION_DENIED\n\nНеобходимо предоставить monitor-пользователю доступ только на чтение."
+
+@pytest.mark.asyncio
+async def test_partial_acl_is_reported_per_operation():
+ allowed=CryptoRemoteClient(server_registry(),CryptoOperationRegistry(),transport=FakeTransport({"status":"ok"}))
+ denied=CryptoRemoteClient(server_registry(),CryptoOperationRegistry(),transport=FakeTransport(success=False,error=ErrorCode.SSH_REMOTE_PERMISSION_DENIED))
+ assert await allowed.fetch(context(),"crypto_runtime_health")=={"status":"ok"}
+ with pytest.raises(CryptoControlError) as caught:await denied.fetch(context(),"crypto_strategy_lab",period="24h")
+ assert caught.value.code=="SSH_REMOTE_PERMISSION_DENIED"
+
+@pytest.mark.asyncio
+async def test_missing_db_is_remote_command_failure():
+ remote=CryptoRemoteClient(server_registry(),CryptoOperationRegistry(),transport=FakeTransport(success=False,error=ErrorCode.SSH_REMOTE_COMMAND_FAILED))
+ with pytest.raises(CryptoControlError) as caught:await remote.fetch(context(),"crypto_equity_history",period="all",environment="production")
+ assert caught.value.code=="SSH_REMOTE_COMMAND_FAILED"
+
+@pytest.mark.asyncio
+async def test_timeout_is_stable():
+ remote=CryptoRemoteClient(server_registry(),CryptoOperationRegistry(),transport=FakeTransport(success=False,error=ErrorCode.SSH_COMMAND_TIMEOUT))
+ with pytest.raises(CryptoControlError) as caught:await remote.fetch(context(),"crypto_runtime_health")
+ assert caught.value.code=="SSH_COMMAND_TIMEOUT"
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("operation","payload","kwargs"),[
+ ("crypto_runtime_health",{"checks":[]},{}),
+ ("crypto_strategy_lab",{"confidence":80},{"period":"24h"}),
+ ("crypto_equity_history",{"environments":{"production":{}}},{"period":"all","environment":"production"}),
+ ("crypto_latest_decision",{"decision":"HOLD"},{}),
+])
+async def test_successful_read_only_operation(operation,payload,kwargs):
+ remote=CryptoRemoteClient(server_registry(),CryptoOperationRegistry(),transport=FakeTransport(payload))
+ assert await remote.fetch(context(),operation,**kwargs)==payload
 
 def test_tool_schemas_hide_trusted_fields():
  reg=ToolRegistry();register_crypto_tools(reg,object())
