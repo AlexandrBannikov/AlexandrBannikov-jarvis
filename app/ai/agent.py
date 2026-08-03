@@ -243,6 +243,9 @@ class JarvisAgent:
                 not self.rate_limiter.web_search(trusted_principal)):
             return "Лимит интернет-поиска временно исчерпан. Попробуйте позже."
         weather_request = RequestIntent.WEATHER in decision.intents
+        current_information_request = (
+            RequestIntent.CURRENT_INFORMATION in decision.intents
+        )
         if search_required and not self.web_search_enabled:
             audit_logger.info(
                 "agent_request_finished user_id=%s tool_rounds=0 "
@@ -279,9 +282,9 @@ class JarvisAgent:
             location_context = pre_location_context
             if self.location_service is not None and user_id is not None:
                 if location_context: instructions += "\n\n" + location_context
-                if weather_request and location_item is not None and decision.location_source == "saved":
+                if (weather_request or current_information_request) and location_item is not None and decision.location_source == "saved":
                     instructions += (
-                        "\nWeather lookup coordinates (private routing data; use only for this weather "
+                        "\nCurrent-data lookup coordinates (private routing data; use only for this "
                         f"lookup and never repeat them): {location_item.latitude:.5f},"
                         f"{location_item.longitude:.5f}. Prefer these coordinates over an ambiguous place name."
                     )
@@ -379,7 +382,7 @@ class JarvisAgent:
                 input_items=request_input,
                 tools=(
                     [{"type": "web_search", "search_context_size": self.web_search_context_size}]
-                    if weather_request and allow_web
+                    if current_information_request and allow_web
                     else self._tool_schemas(
                         allow_web=allow_web, principal=trusted_principal
                     )
@@ -388,7 +391,7 @@ class JarvisAgent:
                 instructions=instructions,
                 correlation_id=correlation_id,
                 intent=decision.intent.value,
-                max_tool_calls=(self.web_search_max_attempts if weather_request else None),
+                max_tool_calls=(self.web_search_max_attempts if current_information_request else None),
             )
             seen_calls: set[str] = set()
             while True:
