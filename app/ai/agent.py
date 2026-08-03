@@ -303,6 +303,10 @@ class JarvisAgent:
                      "content": item["content"] if item["role"] != "tool" else "Tool result summary: " + item["content"]}
                     for item in history
                 ]
+                if document_context or image_data_url:
+                    # Private document/image questions are self-contained and
+                    # must not be biased by an unrelated prior runtime topic.
+                    conversation_input = None
                 active_state = self.conversation_manager.storage.get_state(conversation_key)
                 active_conversation = bool(active_state and active_state.status == "active" and not active_state.is_expired())
                 rendered = "\n".join(f"[{item['provenance']}] {item['role']}: {item['content']}" for item in history)
@@ -310,7 +314,7 @@ class JarvisAgent:
                     "pending questions and recent history over persistent projects. "
                     "Treat natural short answers as continuations and never choose a random stored project. "
                     f"\nIntent={intent}\n{rendered}")
-            if self.memory_manager is not None:
+            if self.memory_manager is not None and not document_context and not image_data_url:
                 family_write = bool(re.search(
                     r"(?i)(сохрани.*для семьи|общ(?:ую|ей) память|семейн(?:ая|ой) информац)",
                     user_text,
