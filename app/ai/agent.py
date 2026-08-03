@@ -1,6 +1,8 @@
 """Bounded OpenAI Responses API agent loop for read-only Jarvis tools."""
 
 import asyncio
+import hashlib
+import json
 import logging
 import re
 import time
@@ -19,6 +21,7 @@ from app.ai.provider import (
     LLMPermissionError,
     LLMProviderError,
     LLMRateLimitError,
+    LLMQuotaError,
     LLMTimeoutError,
     LLMWebSearchUnavailableError,
     LLMWebSearchUnsupportedError,
@@ -42,6 +45,14 @@ audit_logger = logging.getLogger("jarvis.audit")
 MAX_TOOL_ROUNDS = 4
 TOOL_ROUND_LIMIT_MESSAGE = (
     "Не удалось завершить запрос: превышен лимит вызовов инструментов."
+)
+WEB_SEARCH_DUPLICATE_MESSAGE = (
+    "Не удалось получить актуальные данные: повторился одинаковый вызов "
+    "инструмента. Код: WEB_SEARCH_DUPLICATE_TOOL_CALL"
+)
+WEB_SEARCH_TIMEOUT_MESSAGE = (
+    "Не удалось получить актуальную погоду: поиск превысил время ожидания. "
+    "Код: WEB_SEARCH_TIMEOUT"
 )
 EMPTY_RESPONSE_MESSAGE = "AI-сервис вернул пустой ответ."
 WEB_SEARCH_DISABLED_MESSAGE = "Поиск в интернете сейчас отключён."
@@ -132,6 +143,7 @@ class JarvisAgent:
         capability_policy: CapabilityPolicy | None = None,
         rate_limiter: RateLimiter | None = None,
         router: UniversalRequestRouter | None = None,
+        web_search_max_attempts: int = 1,
     ) -> None:
         if max_tool_rounds < 1:
             raise ValueError("max_tool_rounds must be positive")
@@ -149,6 +161,7 @@ class JarvisAgent:
         self.rate_limiter = rate_limiter
         self.router = router or UniversalRequestRouter()
         self.answer_guard = AnswerCapabilityGuard()
+        self.web_search_max_attempts = web_search_max_attempts
         self.last_routing_intent = "UNKNOWN"
         self.last_routing_capabilities_count = 0
         self.last_routing_status = "never"
@@ -166,8 +179,12 @@ class JarvisAgent:
         principal: Principal | None = None,
         document_context: str | None = None,
         image_data_url: str | None = None,
+        correlation_id: str | None = None,
     ) -> str:
         started_at = time.monotonic()
+        correlation_id = correlation_id or hashlib.sha256(
+            str(time.monotonic_ns()).encode()
+        ).hexdigest()[:20]
         trusted_principal = principal or Principal(user_id or 0, OWNER, "active")
         if not self.capability_policy.require(trusted_principal, "assistant.chat"):
             return "Доступ к этому боту предоставляется только по приглашению владельца."
@@ -184,9 +201,9 @@ class JarvisAgent:
             user_id, chat_id, source_message_id, is_allowlisted
         )
         audit_logger.info(
-            "agent_request_started user_id=%s text_length=%d "
+            "agent_request_started correlation_id=%s user_id=%s text_length=%d "
             "web_search_enabled=%s",
-            user_id,
+            correlation_id, user_id,
             len(user_text),
             str(self.web_search_enabled).lower(),
         )
@@ -344,9 +361,9 @@ class JarvisAgent:
                          self.capability_policy.allows(
                              trusted_principal, "assistant.web_search"))
             audit_logger.info(
-                "agent_routing user_id=%s tool_selected=%s "
+                "agent_routing correlation_id=%s user_id=%s intent=%s tool_selected=%s "
                 "tool_skipped=%s fallback_reason=none",
-                user_id,
+                correlation_id, user_id, decision.intent.value,
                 "web_search" if self.web_search_enabled and allow_web else "model_auto",
                 "none" if self.web_search_enabled and allow_web else "web_search",
             )
@@ -360,12 +377,20 @@ class JarvisAgent:
                 ]}]
             response = await self._create_response(
                 input_items=request_input,
-                tools=self._tool_schemas(
-                    allow_web=allow_web, principal=trusted_principal
+                tools=(
+                    [{"type": "web_search", "search_context_size": self.web_search_context_size}]
+                    if weather_request and allow_web
+                    else self._tool_schemas(
+                        allow_web=allow_web, principal=trusted_principal
+                    )
                 ),
                 tool_choice="required" if search_required else "auto",
                 instructions=instructions,
+                correlation_id=correlation_id,
+                intent=decision.intent.value,
+                max_tool_calls=(self.web_search_max_attempts if weather_request else None),
             )
+            seen_calls: set[str] = set()
             while True:
                 raw_response_id = str(
                     getattr(response, "id", "unknown")
@@ -377,9 +402,9 @@ class JarvisAgent:
                     or self._web_search_used(response)
                 )
                 audit_logger.info(
-                    "agent_response user_id=%s response_id=%s "
+                    "agent_response correlation_id=%s user_id=%s response_id=%s "
                     "tool_rounds=%d tool_calls=%d",
-                    user_id,
+                    correlation_id, user_id,
                     response_id,
                     rounds,
                     len(calls),
@@ -461,6 +486,12 @@ class JarvisAgent:
                 rounds += 1
                 outputs = []
                 for call in calls:
+                    fingerprint = self._tool_fingerprint(call)
+                    if fingerprint in seen_calls:
+                        error_type = "web_search_duplicate_tool_call"
+                        self.last_tool_fallback_code = "WEB_SEARCH_DUPLICATE_TOOL_CALL"
+                        return WEB_SEARCH_DUPLICATE_MESSAGE
+                    seen_calls.add(fingerprint)
                     output = await self._execute_call(
                             call,
                             user_id=user_id,
@@ -468,6 +499,7 @@ class JarvisAgent:
                             source_message_id=source_message_id,
                             ssh_context=ssh_context,
                             principal=trusted_principal,
+                            correlation_id=correlation_id,
                         )
                     outputs.append(output)
                     if conversation_key is not None:
@@ -482,6 +514,8 @@ class JarvisAgent:
                     tool_choice="required" if search_required else "auto",
                     previous_response_id=raw_response_id,
                     instructions=instructions,
+                    correlation_id=correlation_id,
+                    intent=decision.intent.value,
                 )
         except LLMWebSearchUnsupportedError:
             error_type = "web_search_unsupported"
@@ -532,19 +566,35 @@ class JarvisAgent:
             return "Выбранная модель недоступна. Обратитесь к администратору."
         except LLMRateLimitError:
             error_type = "rate_limit"
-            return "Превышен лимит OpenAI. Попробуйте позже."
-        except (LLMTimeoutError, LLMNetworkError, LLMProviderError):
-            error_type = "timeout"
-            return "Временная ошибка OpenAI. Попробуйте позже."
+            return "Сервис ИИ временно ограничил частоту запросов. Попробуйте немного позже. Код: OPENAI_RATE_LIMIT"
+        except LLMQuotaError:
+            error_type = "quota_exceeded"
+            return "Для OpenAI закончилась доступная квота. Код: OPENAI_QUOTA_EXCEEDED"
+        except LLMTimeoutError:
+            error_type = "web_search_timeout" if search_required else "openai_timeout"
+            self.last_tool_fallback_code = (
+                "WEB_SEARCH_TIMEOUT" if search_required else "OPENAI_TIMEOUT"
+            )
+            return (
+                WEB_SEARCH_TIMEOUT_MESSAGE
+                if search_required
+                else "Временная ошибка OpenAI. Код: OPENAI_TIMEOUT"
+            )
+        except LLMNetworkError:
+            error_type = "openai_connection_error"
+            return "Не удалось подключиться к OpenAI. Код: OPENAI_CONNECTION_ERROR"
+        except LLMProviderError:
+            error_type = "unknown_provider_error"
+            return "Временная ошибка OpenAI. Код: UNKNOWN_PROVIDER_ERROR"
         except Exception:
             error_type = "internal_error"
             logger.exception("Unexpected Jarvis agent error")
             return "Произошла внутренняя ошибка. Попробуйте позже."
         finally:
             audit_logger.info(
-                "agent_request_finished user_id=%s tool_rounds=%d "
+                "agent_request_finished correlation_id=%s user_id=%s tool_rounds=%d "
                 "success=%s error_type=%s duration_ms=%.3f",
-                user_id,
+                correlation_id, user_id,
                 rounds,
                 str(success).lower(),
                 error_type,
@@ -558,6 +608,18 @@ class JarvisAgent:
             instructions=instructions,
             **kwargs,
         )
+
+    @staticmethod
+    def _tool_fingerprint(call: object) -> str:
+        name = str(_item_value(call, "name", "")).strip().lower()
+        raw = str(_item_value(call, "arguments", "{}"))
+        try:
+            normalized = json.dumps(
+                json.loads(raw), sort_keys=True, separators=(",", ":")
+            )
+        except (TypeError, ValueError):
+            normalized = raw.strip()
+        return hashlib.sha256(f"{name}:{normalized}".encode()).hexdigest()
 
     @staticmethod
     def _pending_from_text(text: str) -> PendingQuestion | None:
@@ -596,6 +658,7 @@ class JarvisAgent:
     async def _fallback_without_web(
         self, user_text: str, *, user_id: int | None,
         principal: Principal | None = None,
+        correlation_id: str = "none",
     ) -> str:
         """Allow a stable-knowledge answer after hosted search failure."""
         try:
@@ -728,6 +791,7 @@ class JarvisAgent:
         source_message_id: int | None = None,
         ssh_context: SSHRequestContext | None = None,
         principal: Principal | None = None,
+        correlation_id: str = "none",
     ) -> dict[str, str]:
         call_id = str(_item_value(call, "call_id", ""))
         tool_name = str(_item_value(call, "name", ""))
@@ -811,9 +875,9 @@ class JarvisAgent:
             )
 
         audit_logger.info(
-            "agent_tool_call user_id=%s tool=%s host=%s service=%s "
+            "agent_tool_call correlation_id=%s user_id=%s tool=%s host=%s service=%s "
             "success=%s error_type=%s",
-            user_id,
+            correlation_id, user_id,
             _safe_log_value(tool_name or "unknown"),
             safe_metadata.get("host_alias"),
             safe_metadata.get("service_name"),

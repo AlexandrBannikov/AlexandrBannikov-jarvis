@@ -542,10 +542,26 @@ async def handle_text(
     user_id = update.effective_user.id if update.effective_user else 0
     chat_id = update.effective_chat.id if update.effective_chat else 0
     reminder_service = context.application.bot_data.get("reminder_service")
+    correlation_id = uuid.uuid4().hex[:20]
+    request_deadline = float(context.application.bot_data.get(
+        "request_deadline_seconds", 45
+    ))
+    deadline_at = asyncio.get_running_loop().time() + request_deadline
+    processed_updates = context.application.bot_data.setdefault("processed_updates", set())
+    update_id = getattr(update, "update_id", None)
+    if update_id is not None and update_id in processed_updates:
+        logger.info("duplicate_update correlation_id=%s status=ignored", correlation_id)
+        return
+    if update_id is not None:
+        processed_updates.add(update_id)
+        if len(processed_updates) > 2048:
+            processed_updates.pop()
     locks = context.application.bot_data["user_locks"]
-    user_lock = locks.setdefault(user_id, asyncio.Lock())
-    if user_lock.locked():
+    scope = (user_id, chat_id)
+    user_lock = locks.setdefault(scope, asyncio.Lock())
+    if user_lock.locked() and re.search(r"(?i)^\s*(?:ты\s+)?завис\??\s*$", prompt):
         await message.reply_text("Предыдущий запрос ещё обрабатывается.")
+        logger.info("request_status correlation_id=%s state=active", correlation_id)
         return
 
     async with user_lock:
@@ -609,7 +625,7 @@ async def handle_text(
             ask_kwargs = dict(user_id=user_id, chat_id=chat_id,
                               source_message_id=getattr(message, "message_id", None),
                               is_allowlisted=bool(principal and principal.role == OWNER),
-                              principal=principal)
+                              principal=principal, correlation_id=correlation_id)
             if document_service is not None:
                 page_match=re.search(r"(?i)страниц[аеы]?\s+(\d+)",prompt)
                 sheet_match=re.search(r"(?i)лист[ае]?\s+[«\"]?([^»\"?.]+)",prompt)
@@ -622,7 +638,19 @@ async def handle_text(
             reply_to = getattr(getattr(message, "reply_to_message", None), "message_id", None)
             if thread_id is not None: ask_kwargs["thread_id"] = thread_id
             if reply_to is not None: ask_kwargs["reply_to_message_id"] = reply_to
-            response = await agent.ask(prompt, **ask_kwargs)
+            response = await asyncio.wait_for(
+                agent.ask(prompt, **ask_kwargs),
+                timeout=max(0.1, deadline_at - asyncio.get_running_loop().time()),
+            )
+        except asyncio.TimeoutError:
+            logger.error(
+                "request_deadline correlation_id=%s status=timeout code=AGENT_QUEUE_TIMEOUT",
+                correlation_id,
+            )
+            response = (
+                "Не удалось завершить запрос вовремя. "
+                "Код: AGENT_QUEUE_TIMEOUT"
+            )
         except (
             LLMConfigurationError,
             LLMTimeoutError,
@@ -649,9 +677,18 @@ async def handle_text(
             typing_task.cancel()
             with suppress(asyncio.CancelledError):
                 await typing_task
+            logger.info("typing_loop correlation_id=%s state=stopped", correlation_id)
 
         for chunk in _split_message(response):
-            await message.reply_text(document_service.redact(chunk) if document_service is not None else chunk)
+            try:
+                await asyncio.wait_for(
+                    message.reply_text(document_service.redact(chunk) if document_service is not None else chunk),
+                    timeout=max(0.1, deadline_at - asyncio.get_running_loop().time()),
+                )
+                logger.info("telegram_response correlation_id=%s status=sent", correlation_id)
+            except Exception:
+                logger.error("telegram_response correlation_id=%s status=failed code=TELEGRAM_SEND_ERROR", correlation_id)
+                raise
 
 
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

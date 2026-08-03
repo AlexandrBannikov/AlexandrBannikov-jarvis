@@ -74,7 +74,11 @@ class UniversalRequestRouter:
     def _intents(self, text: str, document: bool, image: bool) -> list[RequestIntent]:
         found: list[RequestIntent] = []
         checks: Iterable[tuple[RequestIntent, tuple[str, ...]]] = (
-            (RequestIntent.WEATHER, (r"\bпогод\w*", r"\bпрогноз\s+погод")),
+            (RequestIntent.WEATHER, (
+                r"\bпогод\w*", r"\bпрогноз\s+погод",
+                r"\b(?:дожд|снег|ливень|мороз|жарко|холодно)\w*",
+                r"\bчто\s+надеть\b",
+            )),
             (RequestIntent.NEWS, (r"\bновост\w*", r"что\s+произошло\s+сегодня")),
             (RequestIntent.FINANCE_MARKET, (r"\b(?:ETH|BTC|акци\w*|курс\w*|котиров\w*)\b", r"сколько\s+(?:сейчас\s+)?стоит")),
             (RequestIntent.CRYPTO_BOT_RUNTIME, (r"\bcrypto[- ]?bot\b", r"\b(?:мой|наш)\s+бот\b", r"\b(?:позици|equity|confidence|score|pnl)\w*\b")),

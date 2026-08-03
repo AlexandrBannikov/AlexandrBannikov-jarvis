@@ -28,7 +28,8 @@ def test_ai_client_selects_openai_provider(provider_class: Mock) -> None:
 
     assert client.ask("question", "system") == "answer"
     provider_class.assert_called_once_with(
-        api_key="openai-key", model="test-model", base_url=None
+        api_key="openai-key", model="test-model", base_url=None,
+        timeout=25, max_retries=0,
     )
     provider.generate_response.assert_called_once_with("question", "system")
 

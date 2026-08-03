@@ -275,13 +275,13 @@ def test_request_log_contains_metadata_but_not_content(
         ),
         (
             APITimeoutError(request=Mock()),
-            LLMWebSearchUnavailableError,
+            LLMTimeoutError,
         ),
         (
             RateLimitError(
                 "limited", response=sdk_response(429), body=None
             ),
-            LLMWebSearchUnavailableError,
+            LLMRateLimitError,
         ),
         (
             APIConnectionError(request=Mock()),

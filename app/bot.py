@@ -248,7 +248,7 @@ def build_application(config: Config) -> Application:
     agent = JarvisAgent(
         ai_client.provider,
         tool_manager,
-        max_tool_rounds=config.max_tool_rounds,
+        max_tool_rounds=config.agent_max_tool_iterations,
         web_search_enabled=config.web_search_enabled,
         web_search_context_size=config.web_search_context_size,
         memory_manager=memory_manager,
@@ -256,10 +256,13 @@ def build_application(config: Config) -> Application:
         location_service=location_service,
         capability_policy=capability_policy,
         rate_limiter=rate_limiter,
+        web_search_max_attempts=config.web_search_max_attempts,
     )
     application.bot_data["agent"] = agent
     set_routing_health_provider(agent)
     application.bot_data["user_locks"] = {}
+    application.bot_data["request_deadline_seconds"] = config.agent_request_deadline_seconds
+    application.bot_data["processed_updates"] = set()
     application.add_handler(
         MessageHandler(filters.ALL, log_incoming_update), group=-2
     )

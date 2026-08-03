@@ -26,6 +26,8 @@ class AIClient:
                 api_key=config.openai_api_key,
                 model=config.openai_model,
                 base_url=config.openai_base_url,
+                timeout=config.openai_request_timeout_seconds,
+                max_retries=0,
             )
         logger.error("Unsupported LLM provider: %s", provider_name)
         raise LLMConfigurationError(

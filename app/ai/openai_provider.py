@@ -28,6 +28,7 @@ from app.ai.provider import (
     LLMProviderError,
     LLMTimeoutError,
     LLMRateLimitError,
+    LLMQuotaError,
     LLMWebSearchUnavailableError,
     LLMWebSearchUnsupportedError,
 )
@@ -37,7 +38,12 @@ logger = logging.getLogger(__name__)
 DEFAULT_OPENAI_MODEL = "gpt-5.6-sol"
 DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
 RESPONSES_ENDPOINT = "/v1/responses"
-OPENAI_MAX_RETRIES = 3
+OPENAI_MAX_RETRIES = 0
+
+
+def _safe_correlation_id(value: object) -> str:
+    text = str(value)
+    return text if re.fullmatch(r"[a-f0-9]{16,32}", text) else "none"
 
 
 def _request_id(error_or_response: object) -> str:
@@ -132,11 +138,13 @@ class OpenAIProvider(LLMProvider):
         model: str,
         base_url: str | None = None,
         timeout: float = 30.0,
+        max_retries: int = OPENAI_MAX_RETRIES,
     ) -> None:
         self.api_key = api_key
         self.model = model
         self.base_url = base_url
         self.timeout = timeout
+        self.max_retries = max_retries
         self._client: OpenAI | None = None
         logger.info(
             "Configured LLM provider: provider=openai model=%s endpoint=%s",
@@ -151,7 +159,7 @@ class OpenAIProvider(LLMProvider):
             options: dict[str, object] = {
                 "api_key": self.api_key,
                 "timeout": self.timeout,
-                "max_retries": OPENAI_MAX_RETRIES,
+                "max_retries": self.max_retries,
                 # Override an empty OPENAI_BASE_URL inherited by the SDK.
                 "base_url": self.base_url or DEFAULT_OPENAI_BASE_URL,
             }
@@ -175,6 +183,9 @@ class OpenAIProvider(LLMProvider):
         tool_choice: str = "auto",
         previous_response_id: str | None = None,
         instructions: str | None = None,
+        correlation_id: str = "none",
+        intent: str = "UNKNOWN",
+        max_tool_calls: int | None = None,
     ) -> object:
         """Create a non-streaming Responses API response with optional tools."""
         request: dict[str, object] = {"input": input_items, "stream": False}
@@ -187,18 +198,27 @@ class OpenAIProvider(LLMProvider):
                 request["include"] = ["web_search_call.action.sources"]
         if previous_response_id:
             request["previous_response_id"] = previous_response_id
-        return self._create(**request)
+        if max_tool_calls is not None:
+            request["max_tool_calls"] = max_tool_calls
+        return self._create(correlation_id=correlation_id, intent=intent, **request)
 
     def _create(self, **request: object) -> object:
         """Call Responses API with safe telemetry and a model fallback."""
         started_at = time.monotonic()
         model = self.model
         tools = request.get("tools")
+        correlation_id = _safe_correlation_id(request.pop("correlation_id", "none"))
+        intent = str(request.pop("intent", "UNKNOWN"))[:40]
         web_search_enabled = isinstance(tools, list) and any(
             isinstance(tool, dict) and tool.get("type") == "web_search"
             for tool in tools
         )
         try:
+            logger.info(
+                "OpenAI request started: correlation_id=%s intent=%s provider=openai "
+                "model=%s endpoint=%s attempt=1",
+                correlation_id, intent, model, RESPONSES_ENDPOINT,
+            )
             try:
                 response = self._get_client().responses.create(
                     model=model, **request
@@ -222,9 +242,9 @@ class OpenAIProvider(LLMProvider):
                 )
                 self.model = model
             logger.info(
-                "OpenAI request succeeded: provider=openai model=%s "
+                "OpenAI request succeeded: correlation_id=%s intent=%s provider=openai model=%s "
                 "endpoint=%s status=200 request_id=%s duration_ms=%.3f",
-                model,
+                correlation_id, intent, model,
                 RESPONSES_ENDPOINT,
                 _request_id(response),
                 (time.monotonic() - started_at) * 1_000,
@@ -232,10 +252,10 @@ class OpenAIProvider(LLMProvider):
             return response
         except LLMConfigurationError:
             logger.error(
-                "OpenAI request failed: provider=openai model=%s "
+                "OpenAI request failed: correlation_id=%s intent=%s provider=openai model=%s "
                 "endpoint=%s status=none request_id=none "
                 "error_type=LLMConfigurationError duration_ms=%.3f",
-                model,
+                correlation_id, intent, model,
                 RESPONSES_ENDPOINT,
                 (time.monotonic() - started_at) * 1_000,
             )
@@ -243,11 +263,11 @@ class OpenAIProvider(LLMProvider):
         except APIError as error:
             fields = _error_fields(error)
             logger.error(
-                "OpenAI request failed: provider=openai model=%s "
+                "OpenAI request failed: correlation_id=%s intent=%s provider=openai model=%s "
                 "endpoint=%s status=%s request_id=%s error_type=%s "
                 "error_chain=%s error_code=%s api_error_type=%s "
                 "error_param=%s error_message=%s duration_ms=%.3f",
-                model,
+                correlation_id, intent, model,
                 RESPONSES_ENDPOINT,
                 _status_code(error),
                 _request_id(error),
@@ -270,11 +290,9 @@ class OpenAIProvider(LLMProvider):
                 translated = LLMWebSearchUnsupportedError(
                     "Hosted web search is unsupported"
                 )
-            elif web_search_enabled and isinstance(
+            elif web_search_enabled and not isinstance(error, APITimeoutError) and isinstance(
                 error,
                 (
-                    RateLimitError,
-                    APITimeoutError,
                     APIConnectionError,
                     InternalServerError,
                 ),
@@ -295,7 +313,10 @@ class OpenAIProvider(LLMProvider):
             elif isinstance(error, BadRequestError):
                 translated = LLMBadRequestError("OpenAI request rejected")
             elif isinstance(error, RateLimitError):
-                translated = LLMRateLimitError("OpenAI rate limit reached")
+                if fields["code"].lower() in {"insufficient_quota", "quota_exceeded"}:
+                    translated = LLMQuotaError("OpenAI quota exhausted")
+                else:
+                    translated = LLMRateLimitError("OpenAI rate limit reached")
             elif isinstance(error, APITimeoutError):
                 translated = LLMTimeoutError("OpenAI request timed out")
             elif isinstance(error, APIConnectionError):

@@ -649,7 +649,7 @@ def test_one_tool_call_uses_matching_call_id_and_previous_response() -> None:
 def test_multiple_tool_calls_are_returned_together() -> None:
     provider = FakeProvider(
         [
-            response("r1", calls=[call("c1"), call("c2")]),
+            response("r1", calls=[call("c1"), call("c2", arguments='{\"kind\":2}')]),
             response("r2", text="Обе проверки завершены."),
         ]
     )
@@ -665,7 +665,7 @@ def test_multiple_tool_calls_are_returned_together() -> None:
 
     outputs = provider.requests[1]["input_items"]
     assert [item["call_id"] for item in outputs] == ["c1", "c2"]
-    assert tool_manager.execute.call_count == 2
+    assert tool_manager.execute.call_count == 1
 
 
 @pytest.mark.parametrize(
@@ -726,9 +726,9 @@ def test_unsuccessful_tool_result_is_returned_to_model() -> None:
 def test_tool_round_limit_stops_loop() -> None:
     provider = FakeProvider(
         [
-            response("r1", calls=[call("c1")]),
-            response("r2", calls=[call("c2")]),
-            response("r3", calls=[call("c3")]),
+            response("r1", calls=[call("c1", arguments='{\"n\":1}')]),
+            response("r2", calls=[call("c2", arguments='{\"n\":2}')]),
+            response("r3", calls=[call("c3", arguments='{\"n\":3}')]),
         ]
     )
 
@@ -761,9 +761,9 @@ def test_empty_final_response_has_safe_message() -> None:
     ("error", "message_part"),
     [
         (LLMTimeoutError(), "Временная ошибка OpenAI"),
-        (LLMRateLimitError(), "Превышен лимит OpenAI"),
+        (LLMRateLimitError(), "OPENAI_RATE_LIMIT"),
         (LLMAuthenticationError(), "Ошибка авторизации"),
-        (LLMNetworkError(), "Временная ошибка OpenAI"),
+        (LLMNetworkError(), "OPENAI_CONNECTION_ERROR"),
         (LLMPermissionError(), "недоступна для этого проекта"),
         (LLMBadRequestError(), "ошибки конфигурации инструментов"),
         (LLMModelUnavailableError(), "модель недоступна"),

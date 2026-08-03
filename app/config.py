@@ -30,6 +30,10 @@ class Config:
     telegram_startup_notification: bool = False
     web_search_enabled: bool = False
     web_search_context_size: str = "medium"
+    agent_request_deadline_seconds: int = 45
+    openai_request_timeout_seconds: int = 25
+    web_search_max_attempts: int = 1
+    agent_max_tool_iterations: int = 4
     memory_enabled: bool = False
     memory_max_context: int = 4_000
     memory_max_context_items: int = 20
@@ -226,6 +230,22 @@ def load_config(environment: Mapping[str, str] | None = None) -> Config:
             "JARVIS_WEB_SEARCH_ENABLED",
         ),
         web_search_context_size=web_search_context_size,
+        agent_request_deadline_seconds=_parse_bounded_int(
+            values.get("AGENT_REQUEST_DEADLINE_SECONDS", "45"),
+            "AGENT_REQUEST_DEADLINE_SECONDS", 5, 300,
+        ),
+        openai_request_timeout_seconds=_parse_bounded_int(
+            values.get("OPENAI_REQUEST_TIMEOUT_SECONDS", "25"),
+            "OPENAI_REQUEST_TIMEOUT_SECONDS", 5, 120,
+        ),
+        web_search_max_attempts=_parse_bounded_int(
+            values.get("WEB_SEARCH_MAX_ATTEMPTS", "1"),
+            "WEB_SEARCH_MAX_ATTEMPTS", 1, 3,
+        ),
+        agent_max_tool_iterations=_parse_bounded_int(
+            values.get("AGENT_MAX_TOOL_ITERATIONS", values.get("MAX_TOOL_ROUNDS", "4")),
+            "AGENT_MAX_TOOL_ITERATIONS", 1, 10,
+        ),
         memory_enabled=_parse_boolean(
             values.get("MEMORY_ENABLED", "false"), "MEMORY_ENABLED"
         ),

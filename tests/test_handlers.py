@@ -105,12 +105,15 @@ def test_text_handler_sends_ai_response() -> None:
 
     asyncio.run(handle_text(update, context))
 
+    call_kwargs = context.application.bot_data["agent"].ask.await_args.kwargs
+    correlation_id = call_kwargs["correlation_id"]
+    assert len(correlation_id) == 20
     context.application.bot_data["agent"].ask.assert_awaited_once_with(
         "Hello", user_id=123, chat_id=456, source_message_id=None,
         is_allowlisted=True,
         principal=__import__("app.access", fromlist=["Principal"]).Principal(
             123, "owner", "active"
-        ),
+        ), correlation_id=correlation_id,
     )
     update.effective_message.reply_text.assert_awaited_once_with("AI answer")
 
@@ -265,11 +268,11 @@ def test_text_handler_splits_long_response() -> None:
     )
 
 
-def test_text_handler_rejects_parallel_request() -> None:
+def test_text_handler_status_while_parallel_request() -> None:
     update = make_update()
-    update.effective_message.text = "Hello"
+    update.effective_message.text = "Ты завис?"
     context = make_context()
-    context.application.bot_data["user_locks"][123] = SimpleNamespace(
+    context.application.bot_data["user_locks"][(123, 456)] = SimpleNamespace(
         locked=lambda: True
     )
 

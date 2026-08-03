@@ -23,6 +23,10 @@ class LLMRateLimitError(LLMError):
     """The provider rate limit was reached."""
 
 
+class LLMQuotaError(LLMError):
+    """The provider account has no usable quota."""
+
+
 class LLMAuthenticationError(LLMError):
     """The provider rejected configured credentials."""
 
