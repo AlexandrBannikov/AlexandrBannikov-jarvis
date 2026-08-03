@@ -47,15 +47,16 @@ from app.routing import AnswerCapabilityGuard, RequestFreshness, RequestIntent, 
 logger = logging.getLogger(__name__)
 audit_logger = logging.getLogger("jarvis.audit")
 MAX_TOOL_ROUNDS = 4
+MAX_HOSTED_WEB_SEARCH_CALLS = 4
 TOOL_ROUND_LIMIT_MESSAGE = (
     "Не удалось завершить запрос: превышен лимит вызовов инструментов."
 )
 WEB_SEARCH_DUPLICATE_MESSAGE = (
     "Не удалось получить актуальные данные: повторился одинаковый вызов "
-    "инструмента. Код: WEB_SEARCH_DUPLICATE_TOOL_CALL"
+    "инструмента. Код: WEB_SEARCH_DUPLICATE_CALL"
 )
 WEB_SEARCH_TIMEOUT_MESSAGE = (
-    "Не удалось получить актуальную погоду: поиск превысил время ожидания. "
+    "Онлайн-поиск превысил время ожидания. "
     "Код: WEB_SEARCH_TIMEOUT"
 )
 EMPTY_RESPONSE_MESSAGE = "AI-сервис вернул пустой ответ."
@@ -67,7 +68,7 @@ LOCATION_REQUIRED_MESSAGE = (
     "Отправьте вашу геопозицию Telegram, чтобы я мог уточнить погоду."
 )
 WEB_SEARCH_UNSUPPORTED_MESSAGE = (
-    "Текущая модель не поддерживает веб-поиск."
+    "Текущая модель не поддерживает веб-поиск. Код: WEB_SEARCH_UNSUPPORTED"
 )
 WEB_SEARCH_EMPTY_MESSAGE = (
     "Не удалось найти подтверждённые актуальные данные по этому запросу. "
@@ -88,6 +89,10 @@ WEB_SEARCH_PROVIDER_FALLBACK_MESSAGE = (
 WEB_SEARCH_NOT_REGISTERED_MESSAGE = (
     "Онлайн-поиск не зарегистрирован для этого запроса. "
     "Код: WEB_SEARCH_NOT_REGISTERED"
+)
+CURRENT_INFO_ROUTING_MESSAGE = (
+    "Не удалось построить маршрут для актуальных данных. "
+    "Код: CURRENT_INFO_ROUTING_ERROR"
 )
 WEB_SEARCH_SECRET_MESSAGE = (
     "Запрос содержит потенциальный секрет. Удалите или замените его перед "
@@ -270,6 +275,18 @@ class JarvisAgent:
         current_information_request = (
             RequestIntent.CURRENT_INFORMATION in decision.intents
         )
+        if (
+            current_information_request and not search_required
+            and not decision.needs_location
+            and not document_context and not image_data_url
+            and RequestIntent.CRYPTO_BOT_RUNTIME not in decision.intents
+        ):
+            self.last_routing_status = "error"
+            self.last_tool_fallback_code = "CURRENT_INFO_ROUTING_ERROR"
+            self.last_web_search_metadata = WebSearchExecutionMetadata(
+                provider_error_code="CURRENT_INFO_ROUTING_ERROR"
+            )
+            return CURRENT_INFO_ROUTING_MESSAGE
         if search_required and not self.web_search_enabled:
             audit_logger.info(
                 "agent_request_finished user_id=%s tool_rounds=0 "
@@ -436,6 +453,19 @@ class JarvisAgent:
                     response, requested=search_required,
                 )
                 web_search_call_count += response_metadata.web_search_call_count
+                if web_search_call_count > MAX_HOSTED_WEB_SEARCH_CALLS:
+                    error_type = "web_search_duplicate_call"
+                    self.last_tool_fallback_code = "WEB_SEARCH_DUPLICATE_CALL"
+                    self.last_web_search_metadata = WebSearchExecutionMetadata(
+                        web_search_requested=True,
+                        web_search_executed=True,
+                        web_search_call_count=web_search_call_count,
+                        citations_count=response_metadata.citations_count,
+                        final_text_present=response_metadata.final_text_present,
+                        fallback_used=guard_retried,
+                        provider_error_code="WEB_SEARCH_DUPLICATE_CALL",
+                    )
+                    return WEB_SEARCH_DUPLICATE_MESSAGE
                 self.last_web_search_metadata = WebSearchExecutionMetadata(
                     web_search_requested=search_required,
                     web_search_executed=web_search_was_used,
@@ -561,8 +591,8 @@ class JarvisAgent:
                 for call in calls:
                     fingerprint = self._tool_fingerprint(call)
                     if fingerprint in seen_calls:
-                        error_type = "web_search_duplicate_tool_call"
-                        self.last_tool_fallback_code = "WEB_SEARCH_DUPLICATE_TOOL_CALL"
+                        error_type = "web_search_duplicate_call"
+                        self.last_tool_fallback_code = "WEB_SEARCH_DUPLICATE_CALL"
                         return WEB_SEARCH_DUPLICATE_MESSAGE
                     seen_calls.add(fingerprint)
                     output = await self._execute_call(

@@ -1,11 +1,12 @@
 """Regression matrix for mandatory hosted Web Search execution evidence."""
 
 import asyncio
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
 
-from app.ai.agent import JarvisAgent
+from app.ai.agent import JarvisAgent, WEB_SEARCH_DUPLICATE_MESSAGE
 from app.ai.provider import LLMNetworkError, LLMTimeoutError
 from app.ai.openai_provider import web_search_execution_metadata
 from app.handlers import _should_attach_document_context
@@ -162,3 +163,32 @@ def test_transient_provider_failure_retries_once_with_same_correlation(transient
     assert "answer" in answer
     assert [request["sdk_attempt"] for request in provider.requests] == [1, 2]
     assert all(request["correlation_id"] == "b" * 20 for request in provider.requests)
+
+
+def test_excessive_hosted_calls_are_rejected_with_duplicate_code():
+    provider = Provider([response(calls=5, citations=1, text="answer")])
+    agent = JarvisAgent(
+        provider, ToolManager(ToolRegistry()), run_sync=immediate,
+        web_search_enabled=True,
+    )
+    answer = asyncio.run(agent.ask("Какие последние новости OpenAI?"))
+    assert answer == WEB_SEARCH_DUPLICATE_MESSAGE
+    assert agent.last_web_search_metadata.provider_error_code == "WEB_SEARCH_DUPLICATE_CALL"
+    assert agent.last_web_search_metadata.web_search_call_count == 5
+
+
+def test_current_information_without_search_capability_is_routing_error():
+    class BrokenRouter:
+        def classify(self, *args, **kwargs):
+            decision = UniversalRequestRouter().classify(
+                "Какие последние новости OpenAI?", location_available=True
+            )
+            return replace(decision, required_capabilities=("general_llm",))
+
+    agent = JarvisAgent(
+        Provider([]), ToolManager(ToolRegistry()), run_sync=immediate,
+        web_search_enabled=True, router=BrokenRouter(),
+    )
+    answer = asyncio.run(agent.ask("Какие последние новости OpenAI?"))
+    assert "CURRENT_INFO_ROUTING_ERROR" in answer
+    assert agent.last_tool_fallback_code == "CURRENT_INFO_ROUTING_ERROR"
