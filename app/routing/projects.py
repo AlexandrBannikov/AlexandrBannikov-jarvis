@@ -8,6 +8,7 @@ class ProjectPolicy:
     alias: str
     owner_project: bool = False
     external_project: bool = False
+    writable_by_agent: bool = False
     access: str = "diagnostics_only"
     remediation: str = "report_only"
 
@@ -31,6 +32,7 @@ def safe_registry() -> dict[str, dict[str, object]]:
     return {alias: {
         "owner_project": item.owner_project,
         "external_project": item.external_project,
+        "writable_by_agent": item.writable_by_agent,
         "access": item.access,
         "remediation": item.remediation,
     } for alias, item in PROJECTS.items()}

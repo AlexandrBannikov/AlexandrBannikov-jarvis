@@ -158,6 +158,7 @@ def test_project_registry_exposes_no_paths_or_commands():
     public = safe_registry()
     assert set(public) == {"jarvis", "crypto-bot", "fin-vpn-bot"}
     assert all("path" not in values and "command" not in values for values in public.values())
+    assert all(values["writable_by_agent"] is False for values in public.values())
     assert PROJECTS["crypto-bot"].access == "read_only"
 
 
