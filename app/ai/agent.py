@@ -726,11 +726,27 @@ class JarvisAgent:
 
     async def _create_response(self, **kwargs: Any) -> object:
         instructions = kwargs.pop("instructions", JARVIS_SYSTEM_PROMPT)
-        return await self._run_sync(
-            self.provider.create_response,
-            instructions=instructions,
-            **kwargs,
+        hosted_search = any(
+            isinstance(tool, dict) and tool.get("type") == "web_search"
+            for tool in (kwargs.get("tools") or [])
         )
+        attempts = (1, 2) if hosted_search else (1,)
+        for sdk_attempt in attempts:
+            try:
+                return await self._run_sync(
+                    self.provider.create_response,
+                    instructions=instructions,
+                    sdk_attempt=sdk_attempt,
+                    **kwargs,
+                )
+            except (LLMTimeoutError, LLMNetworkError):
+                if sdk_attempt == attempts[-1]:
+                    raise
+                audit_logger.info(
+                    "provider_retry correlation_id=%s sdk_attempt=2 reason=transient",
+                    _safe_log_value(kwargs.get("correlation_id", "none")),
+                )
+        raise AssertionError("unreachable")
 
     @staticmethod
     def _tool_fingerprint(call: object) -> str:

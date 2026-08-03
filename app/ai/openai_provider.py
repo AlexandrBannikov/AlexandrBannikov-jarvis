@@ -230,6 +230,7 @@ class OpenAIProvider(LLMProvider):
         correlation_id: str = "none",
         intent: str = "UNKNOWN",
         max_tool_calls: int | None = None,
+        sdk_attempt: int = 1,
     ) -> object:
         """Create a non-streaming Responses API response with optional tools."""
         request: dict[str, object] = {"input": input_items, "stream": False}
@@ -244,7 +245,7 @@ class OpenAIProvider(LLMProvider):
             request["previous_response_id"] = previous_response_id
         if max_tool_calls is not None:
             request["max_tool_calls"] = max_tool_calls
-        return self._create(correlation_id=correlation_id, intent=intent, **request)
+        return self._create(correlation_id=correlation_id, intent=intent, sdk_attempt=sdk_attempt, **request)
 
     def _create(self, **request: object) -> object:
         """Call Responses API with safe telemetry and a model fallback."""
@@ -253,6 +254,7 @@ class OpenAIProvider(LLMProvider):
         tools = request.get("tools")
         correlation_id = _safe_correlation_id(request.pop("correlation_id", "none"))
         intent = str(request.pop("intent", "UNKNOWN"))[:40]
+        sdk_attempt = int(request.pop("sdk_attempt", 1))
         web_search_enabled = isinstance(tools, list) and any(
             isinstance(tool, dict) and tool.get("type") == "web_search"
             for tool in tools
@@ -279,8 +281,8 @@ class OpenAIProvider(LLMProvider):
         try:
             logger.info(
                 "OpenAI request started: correlation_id=%s intent=%s provider=openai "
-                "model=%s endpoint=%s attempt=1",
-                correlation_id, intent, model, RESPONSES_ENDPOINT,
+                "model=%s endpoint=%s attempt=%d",
+                correlation_id, intent, model, RESPONSES_ENDPOINT, sdk_attempt,
             )
             try:
                 response = self._get_client().responses.create(

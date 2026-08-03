@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.ai.agent import JarvisAgent
+from app.ai.provider import LLMNetworkError, LLMTimeoutError
 from app.ai.openai_provider import web_search_execution_metadata
 from app.handlers import _should_attach_document_context
 from app.routing import AnswerCapabilityGuard, UniversalRequestRouter
@@ -91,7 +92,10 @@ def test_required_search_refusal_is_rejected(text):
 def response(*, calls=0, citations=0, text="answer"):
     output = [{"type": "web_search_call", "status": "completed"} for _ in range(calls)]
     output.append({"type": "message", "content": [{
-        "annotations": [{"type": "url_citation"} for _ in range(citations)]
+        "annotations": [{
+            "type": "url_citation", "title": f"source-{index}",
+            "url": f"https://example.com/{index}",
+        } for index in range(citations)]
     }]})
     return SimpleNamespace(output=output, output_text=text)
 
@@ -122,7 +126,10 @@ class Provider:
 
     def create_response(self, **kwargs):
         self.requests.append(kwargs)
-        return self.responses.pop(0)
+        item = self.responses.pop(0)
+        if isinstance(item, Exception):
+            raise item
+        return item
 
 
 async def immediate(function, *args, **kwargs):
@@ -143,3 +150,15 @@ def test_model_refusal_forces_one_required_search_retry(refusal):
     assert len(provider.requests) == 2
     assert all(request["tool_choice"] == "required" for request in provider.requests)
     assert all(request["correlation_id"] == "a" * 20 for request in provider.requests)
+
+
+@pytest.mark.parametrize("transient", [LLMTimeoutError(), LLMNetworkError()])
+def test_transient_provider_failure_retries_once_with_same_correlation(transient):
+    provider = Provider([transient, response(calls=1, citations=1, text="answer")])
+    answer = asyncio.run(JarvisAgent(
+        provider, ToolManager(ToolRegistry()), run_sync=immediate,
+        web_search_enabled=True,
+    ).ask("Какие последние новости OpenAI?", correlation_id="b" * 20))
+    assert "answer" in answer
+    assert [request["sdk_attempt"] for request in provider.requests] == [1, 2]
+    assert all(request["correlation_id"] == "b" * 20 for request in provider.requests)
