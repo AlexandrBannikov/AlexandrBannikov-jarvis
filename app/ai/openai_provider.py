@@ -3,6 +3,7 @@
 import logging
 import re
 import time
+from dataclasses import dataclass
 
 from openai import (
     APIConnectionError,
@@ -39,6 +40,49 @@ DEFAULT_OPENAI_MODEL = "gpt-5.6-sol"
 DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
 RESPONSES_ENDPOINT = "/v1/responses"
 OPENAI_MAX_RETRIES = 0
+
+
+@dataclass(frozen=True)
+class WebSearchExecutionMetadata:
+    web_search_requested: bool = False
+    web_search_executed: bool = False
+    web_search_call_count: int = 0
+    citations_count: int = 0
+    final_text_present: bool = False
+    fallback_used: bool = False
+    provider_error_code: str | None = None
+
+
+def web_search_execution_metadata(
+    response: object, *, requested: bool = False,
+    fallback_used: bool = False, provider_error_code: str | None = None,
+) -> WebSearchExecutionMetadata:
+    """Extract bounded hosted-tool evidence without retaining response content."""
+    output = getattr(response, "output", None) or []
+    calls = 0
+    citations = 0
+    for item in output:
+        item_type = item.get("type") if isinstance(item, dict) else getattr(item, "type", None)
+        if item_type == "web_search_call":
+            calls += 1
+        if item_type != "message":
+            continue
+        content_items = item.get("content", []) if isinstance(item, dict) else getattr(item, "content", [])
+        for content in content_items or []:
+            annotations = content.get("annotations", []) if isinstance(content, dict) else getattr(content, "annotations", [])
+            citations += sum(
+                1 for annotation in annotations or []
+                if (annotation.get("type") if isinstance(annotation, dict) else getattr(annotation, "type", None)) == "url_citation"
+            )
+    return WebSearchExecutionMetadata(
+        web_search_requested=requested,
+        web_search_executed=calls > 0,
+        web_search_call_count=calls,
+        citations_count=citations,
+        final_text_present=bool(str(getattr(response, "output_text", "") or "").strip()),
+        fallback_used=fallback_used,
+        provider_error_code=provider_error_code,
+    )
 
 
 def _safe_correlation_id(value: object) -> str:
@@ -213,6 +257,25 @@ class OpenAIProvider(LLMProvider):
             isinstance(tool, dict) and tool.get("type") == "web_search"
             for tool in tools
         )
+        hosted_names = sorted(
+            str(tool.get("type")) for tool in tools or []
+            if isinstance(tool, dict) and tool.get("type") != "function"
+        )
+        local_names = sorted(
+            str(tool.get("name")) for tool in tools or []
+            if isinstance(tool, dict) and tool.get("type") == "function"
+        )
+        logger.info(
+            "OpenAI normalized request: correlation_id=%s model=%s tools_count=%d "
+            "hosted_tools=%s local_tools=%s tool_choice=%s timeout=%s "
+            "max_output_tokens=%s metadata_present=%s",
+            correlation_id, model, len(tools or []),
+            ",".join(hosted_names) or "none",
+            ",".join(local_names) or "none",
+            request.get("tool_choice", "none"), self.timeout,
+            request.get("max_output_tokens", "none"),
+            str(bool(request.get("metadata"))).lower(),
+        )
         try:
             logger.info(
                 "OpenAI request started: correlation_id=%s intent=%s provider=openai "
@@ -266,7 +329,7 @@ class OpenAIProvider(LLMProvider):
                 "OpenAI request failed: correlation_id=%s intent=%s provider=openai model=%s "
                 "endpoint=%s status=%s request_id=%s error_type=%s "
                 "error_chain=%s error_code=%s api_error_type=%s "
-                "error_param=%s error_message=%s duration_ms=%.3f",
+                "error_param=%s duration_ms=%.3f",
                 correlation_id, intent, model,
                 RESPONSES_ENDPOINT,
                 _status_code(error),
@@ -276,7 +339,6 @@ class OpenAIProvider(LLMProvider):
                 fields["code"],
                 fields["type"],
                 fields["param"],
-                fields["message"],
                 (time.monotonic() - started_at) * 1_000,
             )
             if (
@@ -290,13 +352,7 @@ class OpenAIProvider(LLMProvider):
                 translated = LLMWebSearchUnsupportedError(
                     "Hosted web search is unsupported"
                 )
-            elif web_search_enabled and not isinstance(error, APITimeoutError) and isinstance(
-                error,
-                (
-                    APIConnectionError,
-                    InternalServerError,
-                ),
-            ):
+            elif web_search_enabled and isinstance(error, InternalServerError):
                 translated = LLMWebSearchUnavailableError(
                     "Hosted web search is unavailable"
                 )

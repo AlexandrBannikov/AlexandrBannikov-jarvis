@@ -119,6 +119,15 @@ def health_payload() -> dict[str, object]:
         "pending_intents_count":0,
         "weather_routing_available":bool(_ROUTING_AGENT and _LOCATION_STORAGE is not None),
         "web_search_available":bool(_ROUTING_AGENT and getattr(_ROUTING_AGENT,"web_search_enabled",False)),
+        "web_search_execution": {
+            "web_search_requested": bool(getattr(getattr(_ROUTING_AGENT, "last_web_search_metadata", None), "web_search_requested", False)),
+            "web_search_executed": bool(getattr(getattr(_ROUTING_AGENT, "last_web_search_metadata", None), "web_search_executed", False)),
+            "web_search_call_count": int(getattr(getattr(_ROUTING_AGENT, "last_web_search_metadata", None), "web_search_call_count", 0)),
+            "citations_count": int(getattr(getattr(_ROUTING_AGENT, "last_web_search_metadata", None), "citations_count", 0)),
+            "final_text_present": bool(getattr(getattr(_ROUTING_AGENT, "last_web_search_metadata", None), "final_text_present", False)),
+            "fallback_used": bool(getattr(getattr(_ROUTING_AGENT, "last_web_search_metadata", None), "fallback_used", False)),
+            "provider_error_code": getattr(getattr(_ROUTING_AGENT, "last_web_search_metadata", None), "provider_error_code", None),
+        },
     }
     if _REMINDERS_ENABLED and _REMINDER_STORAGE is not None:
         try:

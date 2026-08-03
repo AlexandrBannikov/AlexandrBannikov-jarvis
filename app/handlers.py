@@ -75,6 +75,15 @@ MAX_INPUT_LENGTH = 4_000
 TELEGRAM_MESSAGE_LIMIT = 4_096
 
 
+def _should_attach_document_context(route: object) -> bool:
+    """Keep an active document from hijacking an unrelated routed request."""
+    capabilities = set(getattr(route, "required_capabilities", ()) or ())
+    private_or_current = {
+        "web_search", "crypto_control", "ssh", "reminders", "memory", "location",
+    }
+    return not bool(capabilities & private_or_current)
+
+
 def _message_type(update: Update) -> str:
     """Return a safe message classification without inspecting its contents."""
     message = update.effective_message
@@ -626,7 +635,9 @@ async def handle_text(
                               source_message_id=getattr(message, "message_id", None),
                               is_allowlisted=bool(principal and principal.role == OWNER),
                               principal=principal, correlation_id=correlation_id)
-            if document_service is not None:
+            if document_service is not None and _should_attach_document_context(
+                preliminary_route
+            ):
                 page_match=re.search(r"(?i)страниц[аеы]?\s+(\d+)",prompt)
                 sheet_match=re.search(r"(?i)лист[ае]?\s+[«\"]?([^»\"?.]+)",prompt)
                 doc_context=await asyncio.to_thread(document_service.context,user_id,chat_id,prompt,page=int(page_match.group(1)) if page_match else None,sheet=sheet_match.group(1).strip() if sheet_match else None)

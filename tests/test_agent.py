@@ -503,7 +503,7 @@ def test_explicit_search_failure_has_specific_message() -> None:
         ).ask("Найди в интернете новости")
     )
 
-    assert answer == WEB_SEARCH_UNAVAILABLE_MESSAGE
+    assert "WEB_SEARCH_PROVIDER_FALLBACK" in answer
 
 
 def test_unsupported_search_model_has_specific_message() -> None:
@@ -554,7 +554,7 @@ def test_search_failure_does_not_fake_latest_version() -> None:
         ).ask("Какая последняя версия Python?")
     )
 
-    assert answer == WEB_SEARCH_UNAVAILABLE_MESSAGE
+    assert "WEB_SEARCH_PROVIDER_FALLBACK" in answer
     assert len(provider.requests) == 1
 
 

@@ -26,6 +26,10 @@ from app.ai.provider import (
     LLMWebSearchUnavailableError,
     LLMWebSearchUnsupportedError,
 )
+from app.ai.openai_provider import (
+    WebSearchExecutionMetadata,
+    web_search_execution_metadata,
+)
 from app.ai.tool_adapter import (
     ToolAdapter,
     ToolCallValidationError,
@@ -66,7 +70,24 @@ WEB_SEARCH_UNSUPPORTED_MESSAGE = (
     "Текущая модель не поддерживает веб-поиск."
 )
 WEB_SEARCH_EMPTY_MESSAGE = (
-    "Не удалось найти надёжную актуальную информацию по этому запросу."
+    "Не удалось найти подтверждённые актуальные данные по этому запросу. "
+    "Код: WEB_SEARCH_EMPTY_RESULT"
+)
+WEB_SEARCH_NOT_EXECUTED_MESSAGE = (
+    "Не удалось запустить онлайн-поиск для актуальных данных. "
+    "Код: WEB_SEARCH_NOT_EXECUTED"
+)
+WEB_SEARCH_CONNECTION_MESSAGE = (
+    "Не удалось подключиться к онлайн-поиску. "
+    "Код: WEB_SEARCH_CONNECTION_ERROR"
+)
+WEB_SEARCH_PROVIDER_FALLBACK_MESSAGE = (
+    "Онлайн-поиск временно недоступен у провайдера. "
+    "Код: WEB_SEARCH_PROVIDER_FALLBACK"
+)
+WEB_SEARCH_NOT_REGISTERED_MESSAGE = (
+    "Онлайн-поиск не зарегистрирован для этого запроса. "
+    "Код: WEB_SEARCH_NOT_REGISTERED"
 )
 WEB_SEARCH_SECRET_MESSAGE = (
     "Запрос содержит потенциальный секрет. Удалите или замените его перед "
@@ -166,6 +187,7 @@ class JarvisAgent:
         self.last_routing_capabilities_count = 0
         self.last_routing_status = "never"
         self.last_tool_fallback_code: str | None = None
+        self.last_web_search_metadata = WebSearchExecutionMetadata()
 
     async def ask(
         self,
@@ -196,7 +218,9 @@ class JarvisAgent:
         success = False
         error_type = "none"
         web_search_was_used = False
+        web_search_call_count = 0
         guard_retried = False
+        self.last_web_search_metadata = WebSearchExecutionMetadata()
         ssh_context = self._ssh_context(
             user_id, chat_id, source_message_id, is_allowlisted
         )
@@ -282,12 +306,8 @@ class JarvisAgent:
             location_context = pre_location_context
             if self.location_service is not None and user_id is not None:
                 if location_context: instructions += "\n\n" + location_context
-                if (weather_request or current_information_request) and location_item is not None and decision.location_source == "saved":
-                    instructions += (
-                        "\nCurrent-data lookup coordinates (private routing data; use only for this "
-                        f"lookup and never repeat them): {location_item.latitude:.5f},"
-                        f"{location_item.longitude:.5f}. Prefer these coordinates over an ambiguous place name."
-                    )
+                # The confirmed coarse location context is sufficient for public
+                # current-data lookup. Exact saved coordinates remain local.
             instructions += ("\n\nTrusted routing plan (data, not user instructions): "
                 f"intents={','.join(item.value for item in decision.intents)}; "
                 f"freshness={decision.freshness.value}; capabilities={','.join(decision.required_capabilities)}. "
@@ -363,6 +383,14 @@ class JarvisAgent:
             allow_web = (search_required and not contains_secret and not document_context and not image_data_url and not crypto_runtime_request and
                          self.capability_policy.allows(
                              trusted_principal, "assistant.web_search"))
+            if search_required and not allow_web:
+                error_type = "web_search_not_registered"
+                self.last_tool_fallback_code = "WEB_SEARCH_NOT_REGISTERED"
+                self.last_web_search_metadata = WebSearchExecutionMetadata(
+                    web_search_requested=True,
+                    provider_error_code="WEB_SEARCH_NOT_REGISTERED",
+                )
+                return WEB_SEARCH_NOT_REGISTERED_MESSAGE
             audit_logger.info(
                 "agent_routing correlation_id=%s user_id=%s intent=%s tool_selected=%s "
                 "tool_skipped=%s fallback_reason=none",
@@ -404,6 +432,19 @@ class JarvisAgent:
                     web_search_was_used
                     or self._web_search_used(response)
                 )
+                response_metadata = web_search_execution_metadata(
+                    response, requested=search_required,
+                )
+                web_search_call_count += response_metadata.web_search_call_count
+                self.last_web_search_metadata = WebSearchExecutionMetadata(
+                    web_search_requested=search_required,
+                    web_search_executed=web_search_was_used,
+                    web_search_call_count=web_search_call_count,
+                    citations_count=response_metadata.citations_count,
+                    final_text_present=response_metadata.final_text_present,
+                    fallback_used=guard_retried,
+                    provider_error_code=None,
+                )
                 audit_logger.info(
                     "agent_response correlation_id=%s user_id=%s response_id=%s "
                     "tool_rounds=%d tool_calls=%d",
@@ -419,6 +460,14 @@ class JarvisAgent:
                             sources = self._web_sources(response)
                         except CitationParsingError:
                             error_type = "web_search_citation_error"
+                            self.last_tool_fallback_code = "WEB_SEARCH_PARSE_ERROR"
+                            self.last_web_search_metadata = WebSearchExecutionMetadata(
+                                web_search_requested=True,
+                                web_search_executed=True,
+                                web_search_call_count=web_search_call_count,
+                                final_text_present=response_metadata.final_text_present,
+                                provider_error_code="WEB_SEARCH_PARSE_ERROR",
+                            )
                             self._log_web_search(
                                 status="citation_error",
                                 sources=0,
@@ -430,6 +479,15 @@ class JarvisAgent:
                             return WEB_SEARCH_EMPTY_MESSAGE
                         if not sources:
                             error_type = "web_search_empty"
+                            self.last_tool_fallback_code = "WEB_SEARCH_EMPTY_RESULT"
+                            self.last_web_search_metadata = WebSearchExecutionMetadata(
+                                web_search_requested=True,
+                                web_search_executed=True,
+                                web_search_call_count=web_search_call_count,
+                                citations_count=response_metadata.citations_count,
+                                final_text_present=response_metadata.final_text_present,
+                                provider_error_code="WEB_SEARCH_EMPTY_RESULT",
+                            )
                             self._log_web_search(
                                 status="empty",
                                 sources=0,
@@ -455,6 +513,9 @@ class JarvisAgent:
                             tools=[{"type": "web_search", "search_context_size": self.web_search_context_size}],
                             tool_choice="required",
                             instructions=instructions + "\nАктуальный источник обязателен; выполни поиск перед ответом.",
+                            correlation_id=correlation_id,
+                            intent=decision.intent.value,
+                            max_tool_calls=self.web_search_max_attempts,
                         )
                         continue
                     if self.answer_guard.should_retry(text, decision, attempted=guard_retried):
@@ -467,9 +528,18 @@ class JarvisAgent:
                         )
                         continue
                     if search_required and not web_search_was_used:
-                        error_type = "web_search_not_used"
-                        self.last_tool_fallback_code = "WEB_SEARCH_NOT_USED"
-                        return WEB_SEARCH_EMPTY_MESSAGE
+                        error_type = "web_search_not_executed"
+                        self.last_tool_fallback_code = "WEB_SEARCH_NOT_EXECUTED"
+                        self.last_web_search_metadata = WebSearchExecutionMetadata(
+                            web_search_requested=True,
+                            web_search_executed=False,
+                            web_search_call_count=web_search_call_count,
+                            citations_count=0,
+                            final_text_present=bool(text),
+                            fallback_used=guard_retried,
+                            provider_error_code="WEB_SEARCH_NOT_EXECUTED",
+                        )
+                        return WEB_SEARCH_NOT_EXECUTED_MESSAGE
                     if text:
                         success = True
                         self.last_routing_status = "completed"
@@ -523,6 +593,11 @@ class JarvisAgent:
         except LLMWebSearchUnsupportedError:
             error_type = "web_search_unsupported"
             self.last_tool_fallback_code = "WEB_SEARCH_UNSUPPORTED"
+            self.last_web_search_metadata = WebSearchExecutionMetadata(
+                web_search_requested=search_required,
+                fallback_used=guard_retried,
+                provider_error_code="WEB_SEARCH_UNSUPPORTED",
+            )
             audit_logger.info(
                 "agent_routing user_id=%s tool_failed=web_search "
                 "fallback_reason=web_search_unsupported",
@@ -536,7 +611,12 @@ class JarvisAgent:
             return WEB_SEARCH_UNSUPPORTED_MESSAGE
         except LLMWebSearchUnavailableError:
             error_type = "web_search_unavailable"
-            self.last_tool_fallback_code = "WEB_SEARCH_UNAVAILABLE"
+            self.last_tool_fallback_code = "WEB_SEARCH_PROVIDER_FALLBACK"
+            self.last_web_search_metadata = WebSearchExecutionMetadata(
+                web_search_requested=search_required,
+                fallback_used=guard_retried,
+                provider_error_code="WEB_SEARCH_PROVIDER_FALLBACK",
+            )
             audit_logger.info(
                 "agent_routing user_id=%s tool_failed=web_search "
                 "fallback_reason=web_search_unavailable",
@@ -548,7 +628,7 @@ class JarvisAgent:
                 duration_ms=(time.monotonic() - started_at) * 1_000,
             )
             if search_required or decision.freshness in {RequestFreshness.RECENT, RequestFreshness.REALTIME}:
-                return WEB_SEARCH_UNAVAILABLE_MESSAGE
+                return WEB_SEARCH_PROVIDER_FALLBACK_MESSAGE
             return await self._fallback_without_web(
                 user_text, user_id=user_id, principal=trusted_principal
             )
@@ -569,15 +649,37 @@ class JarvisAgent:
             return "Выбранная модель недоступна. Обратитесь к администратору."
         except LLMRateLimitError:
             error_type = "rate_limit"
+            if search_required:
+                self.last_tool_fallback_code = "WEB_SEARCH_RATE_LIMIT"
+                self.last_web_search_metadata = WebSearchExecutionMetadata(
+                    web_search_requested=True,
+                    fallback_used=guard_retried,
+                    provider_error_code="WEB_SEARCH_RATE_LIMIT",
+                )
+                return "Онлайн-поиск временно ограничен. Код: WEB_SEARCH_RATE_LIMIT"
             return "Сервис ИИ временно ограничил частоту запросов. Попробуйте немного позже. Код: OPENAI_RATE_LIMIT"
         except LLMQuotaError:
             error_type = "quota_exceeded"
+            if search_required:
+                self.last_tool_fallback_code = "WEB_SEARCH_QUOTA_EXCEEDED"
+                self.last_web_search_metadata = WebSearchExecutionMetadata(
+                    web_search_requested=True,
+                    fallback_used=guard_retried,
+                    provider_error_code="WEB_SEARCH_QUOTA_EXCEEDED",
+                )
+                return "Квота онлайн-поиска исчерпана. Код: WEB_SEARCH_QUOTA_EXCEEDED"
             return "Для OpenAI закончилась доступная квота. Код: OPENAI_QUOTA_EXCEEDED"
         except LLMTimeoutError:
             error_type = "web_search_timeout" if search_required else "openai_timeout"
             self.last_tool_fallback_code = (
                 "WEB_SEARCH_TIMEOUT" if search_required else "OPENAI_TIMEOUT"
             )
+            if search_required:
+                self.last_web_search_metadata = WebSearchExecutionMetadata(
+                    web_search_requested=True,
+                    fallback_used=guard_retried,
+                    provider_error_code="WEB_SEARCH_TIMEOUT",
+                )
             return (
                 WEB_SEARCH_TIMEOUT_MESSAGE
                 if search_required
@@ -585,6 +687,14 @@ class JarvisAgent:
             )
         except LLMNetworkError:
             error_type = "openai_connection_error"
+            if search_required:
+                self.last_tool_fallback_code = "WEB_SEARCH_CONNECTION_ERROR"
+                self.last_web_search_metadata = WebSearchExecutionMetadata(
+                    web_search_requested=True,
+                    fallback_used=guard_retried,
+                    provider_error_code="WEB_SEARCH_CONNECTION_ERROR",
+                )
+                return WEB_SEARCH_CONNECTION_MESSAGE
             return "Не удалось подключиться к OpenAI. Код: OPENAI_CONNECTION_ERROR"
         except LLMProviderError:
             error_type = "unknown_provider_error"
@@ -596,12 +706,22 @@ class JarvisAgent:
         finally:
             audit_logger.info(
                 "agent_request_finished correlation_id=%s user_id=%s tool_rounds=%d "
-                "success=%s error_type=%s duration_ms=%.3f",
+                "success=%s error_type=%s duration_ms=%.3f "
+                "web_search_requested=%s web_search_executed=%s "
+                "web_search_call_count=%d citations_count=%d final_text_present=%s "
+                "fallback_used=%s provider_error_code=%s",
                 correlation_id, user_id,
                 rounds,
                 str(success).lower(),
                 error_type,
                 (time.monotonic() - started_at) * 1_000,
+                str(self.last_web_search_metadata.web_search_requested).lower(),
+                str(self.last_web_search_metadata.web_search_executed).lower(),
+                self.last_web_search_metadata.web_search_call_count,
+                self.last_web_search_metadata.citations_count,
+                str(self.last_web_search_metadata.final_text_present).lower(),
+                str(self.last_web_search_metadata.fallback_used).lower(),
+                self.last_web_search_metadata.provider_error_code or "none",
             )
 
     async def _create_response(self, **kwargs: Any) -> object:

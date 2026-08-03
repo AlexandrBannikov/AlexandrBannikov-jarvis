@@ -285,7 +285,7 @@ def test_request_log_contains_metadata_but_not_content(
         ),
         (
             APIConnectionError(request=Mock()),
-            LLMWebSearchUnavailableError,
+            LLMNetworkError,
         ),
     ],
 )
